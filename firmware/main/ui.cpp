@@ -17,31 +17,35 @@ namespace {
 
 constexpr const char* TAG_UI = "ui";
 
-constexpr uint32_t BG = 0x050711;
-constexpr uint32_t PANEL = 0x0C1122;
-constexpr uint32_t PANEL_ALT = 0x0F1730;
-constexpr uint32_t LINE = 0x26375A;
-constexpr uint32_t CYAN = 0x6CE5FF;
-constexpr uint32_t TEXT = 0xF4F7FF;
-constexpr uint32_t MUTED = 0x8792AD;
-constexpr uint32_t VIOLET = 0x9B7CFF;
-constexpr uint32_t SUCCESS = 0x7FFFC6;
-constexpr uint32_t WARNING = 0xFFCF70;
-constexpr uint32_t DANGER = 0xFF6884;
+// Alias cortos de los tokens de identidad (main/theme.hpp). Tener un solo punto
+// de definicion deja el diff pequeno y evita colores literales dispersos.
+constexpr uint32_t BG = theme::Background;
+constexpr uint32_t PANEL = theme::Surface;
+constexpr uint32_t PANEL_ALT = theme::SurfaceAlt;
+constexpr uint32_t LINE = theme::Border;
+constexpr uint32_t CYAN = theme::Accent;
+constexpr uint32_t ACCENT_SOFT = theme::AccentSoft;
+constexpr uint32_t TEXT = theme::TextPrimary;
+constexpr uint32_t MUTED = theme::TextSecondary;
+constexpr uint32_t VIOLET = theme::AccentAlt;
+constexpr uint32_t DANGER = theme::Danger;
+constexpr uint32_t DANGER_SOFT = theme::DangerSoft;
+constexpr uint32_t GOLD = theme::Gold;  // reservado a logros mayores
+constexpr uint32_t SCRIM = theme::Scrim;
 
 lv_color_t color(uint32_t value) { return lv_color_hex(value); }
 
 uint32_t rank_color(MissionRank rank)
 {
     switch (rank) {
-        case MissionRank::E: return 0x8FA1BD;
-        case MissionRank::D: return 0x76D7B1;
-        case MissionRank::C: return CYAN;
-        case MissionRank::B: return 0x778CFF;
-        case MissionRank::A: return 0xB57CFF;
-        case MissionRank::S: return WARNING;
+        case MissionRank::E: return theme::RankE;
+        case MissionRank::D: return theme::RankD;
+        case MissionRank::C: return theme::RankC;
+        case MissionRank::B: return theme::RankB;
+        case MissionRank::A: return theme::RankA;
+        case MissionRank::S: return theme::RankS;
     }
-    return CYAN;
+    return theme::RankC;
 }
 
 MissionRank rank_from_index(int index)
@@ -54,8 +58,8 @@ void base_style(lv_obj_t* object, uint32_t background, uint32_t border = LINE)
     lv_obj_set_style_bg_color(object, color(background), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(object, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_border_color(object, color(border), LV_PART_MAIN);
-    lv_obj_set_style_border_width(object, 1, LV_PART_MAIN);
-    lv_obj_set_style_radius(object, 5, LV_PART_MAIN);
+    lv_obj_set_style_border_width(object, theme::BorderWidth, LV_PART_MAIN);
+    lv_obj_set_style_radius(object, theme::RadiusControl, LV_PART_MAIN);
     lv_obj_set_style_pad_all(object, 0, LV_PART_MAIN);
     lv_obj_set_style_shadow_width(object, 0, LV_PART_MAIN);
 }
@@ -72,9 +76,13 @@ constexpr uint8_t kClockVisibleRows = 5;
 
 // Altura explicita de las ruedas. No se puede preguntar al widget: en LVGL 9
 // lv_obj_get_height devuelve obj->coords, que todavia vale 0 durante el render.
+// El espacio entre lineas se suma al alto de linea de la fuente (35 + 16 = 51),
+// de modo que cada fila supera el minimo tactil de 48.
+constexpr int kClockRollerLineSpace = 16;
+
 int clock_roller_height()
 {
-    return kClockVisibleRows * (lv_font_get_line_height(&font_es_28) + 4);
+    return kClockVisibleRows * (lv_font_get_line_height(&font_es_28) + kClockRollerLineSpace);
 }
 
 int days_in_month(int year, int month)
@@ -288,7 +296,7 @@ lv_obj_t* AppUi::button(lv_obj_t* parent, const char* text_value, int x, int y, 
     lv_obj_set_style_bg_color(object, color(VIOLET), static_cast<lv_style_selector_t>(LV_PART_MAIN) |
                                                         static_cast<lv_style_selector_t>(LV_STATE_PRESSED));
     lv_obj_add_event_cb(object, action_callback, LV_EVENT_CLICKED, make_action(code, id, value, action_text));
-    lv_obj_t* caption = label(object, text_value, &font_es_14, TEXT);
+    lv_obj_t* caption = label(object, text_value, &font_es_16, TEXT);
     lv_obj_center(caption);
     return object;
 }
@@ -298,6 +306,7 @@ lv_obj_t* AppUi::panel(lv_obj_t* parent, int x, int y, int width, int height, bo
     lv_obj_t* object = lv_obj_create(parent);
     place(object, x, y, width, height);
     base_style(object, PANEL);
+    lv_obj_set_style_radius(object, theme::RadiusPanel, LV_PART_MAIN);
     if (scrollable) {
         lv_obj_set_scroll_dir(object, LV_DIR_VER);
         lv_obj_set_scrollbar_mode(object, LV_SCROLLBAR_MODE_AUTO);
@@ -328,7 +337,7 @@ void AppUi::render()
 
     lv_obj_set_style_bg_color(screen_, color(BG), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(screen_, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_text_font(screen_, &font_es_14, LV_PART_MAIN);
+    lv_obj_set_style_text_font(screen_, &font_es_16, LV_PART_MAIN);
 
     // Con la pantalla apagada solo se dibuja la capa que absorbe el tacto, para
     // que un roce no active botones invisibles. La vista se reconstruye al volver.
@@ -352,29 +361,29 @@ void AppUi::render_header(bool compact)
     const int width = lv_display_get_horizontal_resolution(display_);
     lv_obj_t* header = panel(screen_, 0, 0, width, compact ? 78 : 90, false);
     lv_obj_set_style_border_side(header, LV_BORDER_SIDE_BOTTOM, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(header, color(0x080D1C), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(header, color(PANEL), LV_PART_MAIN);
 
     lv_obj_t* title = label(header, "EL SISTEMA", &font_es_28, TEXT);
     lv_obj_set_pos(title, 20, compact ? 14 : 20);
-    lv_obj_t* subtitle = label(header, "MÓDULO DE PRODUCTIVIDAD", &font_es_14, CYAN);
+    lv_obj_t* subtitle = label(header, "MÓDULO DE PRODUCTIVIDAD", &font_es_16, CYAN);
     lv_obj_set_pos(subtitle, 22, compact ? 45 : 57);
 
     const uint32_t required = XpService::required_for_level(state_.profile.level);
     char profile[96];
     std::snprintf(profile, sizeof(profile), "NIVEL %lu   %lu / %lu XP", static_cast<unsigned long>(state_.profile.level),
                   static_cast<unsigned long>(state_.profile.level_xp), static_cast<unsigned long>(required));
-    lv_obj_t* xp = label(header, profile, &font_es_16, WARNING);
+    lv_obj_t* xp = label(header, profile, &font_es_16, CYAN);
     lv_obj_set_pos(xp, std::max(280, width / 2 - 130), compact ? 26 : 34);
 
     if (repository_.storage_percent() >= 80) {
         char storage[48];
         std::snprintf(storage, sizeof(storage), "ALMACENAMIENTO %u%%", repository_.storage_percent());
-        lv_obj_t* warning = label(header, storage, &font_es_14, DANGER);
+        lv_obj_t* warning = label(header, storage, &font_es_16, DANGER);
         lv_obj_set_pos(warning, width - 520, 8);
     }
 
     button(header, "HISTORIAL", width - 294, 17, 126, 50, ActionCode::OpenHistory);
-    button(header, "+ NUEVA MISIÓN", width - 158, 17, 144, 50, ActionCode::NewMission, 0, 0, nullptr, 0x152B43,
+    button(header, "+ NUEVA MISIÓN", width - 158, 17, 144, 50, ActionCode::NewMission, 0, 0, nullptr, ACCENT_SOFT,
            CYAN);
 }
 
@@ -418,9 +427,9 @@ void AppUi::render_portrait_dashboard()
     lv_obj_t* active = panel(screen_, 16, 92, width - 32, 405, false);
     render_active_panel(active, width - 32, 405);
     button(screen_, "ZONA DE ENFOQUE", 16, 510, (width - 44) / 2, 54, ActionCode::CycleDateFilter, 0, -10,
-           nullptr, portrait_tab_ == 0 ? 0x20365A : PANEL_ALT, portrait_tab_ == 0 ? CYAN : LINE);
+           nullptr, portrait_tab_ == 0 ? ACCENT_SOFT : PANEL_ALT, portrait_tab_ == 0 ? CYAN : LINE);
     button(screen_, "BACKLOG", 28 + (width - 44) / 2, 510, (width - 44) / 2, 54, ActionCode::CycleDateFilter, 0,
-           -11, nullptr, portrait_tab_ == 1 ? 0x20365A : PANEL_ALT, portrait_tab_ == 1 ? CYAN : LINE);
+           -11, nullptr, portrait_tab_ == 1 ? ACCENT_SOFT : PANEL_ALT, portrait_tab_ == 1 ? CYAN : LINE);
     lv_obj_t* list = panel(screen_, 16, 576, width - 32, height - 592, true);
     if (portrait_tab_ == 0) render_focus_list(list, width - 32, height - 592);
     else render_backlog_list(list, width - 32, height - 592);
@@ -441,7 +450,7 @@ void AppUi::render_active_panel(lv_obj_t* parent, int width, int height)
         lv_obj_set_width(help, width - 60);
         lv_obj_set_pos(help, 30, 142);
         button(parent, "+ CREAR MISIÓN", 30, height - 78, 180, 50, ActionCode::NewMission, 0, 0, nullptr,
-               0x152B43, CYAN);
+               ACCENT_SOFT, CYAN);
         button(parent, "MICRÓFONO", 222, height - 78, 150, 50, ActionCode::DictationInfo);
         return;
     }
@@ -460,14 +469,14 @@ void AppUi::render_active_panel(lv_obj_t* parent, int width, int height)
     }
     timer_label_ = label(parent, duration_text(service_.current_elapsed(*mission)).c_str(), &font_es_28, CYAN);
     lv_obj_set_pos(timer_label_, 24, std::max(198, height / 2 - 24));
-    active_status_label_ = label(parent, "CRONÓMETRO ACTIVO", &font_es_14, SUCCESS);
+    active_status_label_ = label(parent, "CRONÓMETRO ACTIVO", &font_es_16, CYAN);
     lv_obj_set_pos(active_status_label_, 26, std::max(236, height / 2 + 22));
 
     const int y = height - 76;
-    button(parent, "PAUSAR", 22, y, 120, 48, ActionCode::PauseMission, mission->id, 0, nullptr, 0x253451, CYAN);
+    button(parent, "PAUSAR", 22, y, 120, 48, ActionCode::PauseMission, mission->id, 0, nullptr, PANEL_ALT, CYAN);
     button(parent, "EDITAR", 154, y, 120, 48, ActionCode::EditMission, mission->id);
-    button(parent, "COMPLETAR", 286, y, 152, 48, ActionCode::CompleteMission, mission->id, 0, nullptr, 0x183D38,
-           SUCCESS);
+    button(parent, "COMPLETAR", 286, y, 152, 48, ActionCode::CompleteMission, mission->id, 0, nullptr, ACCENT_SOFT,
+           CYAN);
     button(parent, "MIC", width - 102, y, 76, 48, ActionCode::DictationInfo);
 }
 
@@ -517,27 +526,27 @@ void AppUi::render_mission_row(lv_obj_t* parent, const Mission& mission, bool fo
     lv_obj_t* title = label(parent, truncate(mission.title, is_portrait() ? 50 : 32).c_str(), &font_es_16, TEXT);
     lv_obj_set_width(title, width - 80);
     lv_obj_set_pos(title, 42, 11);
-    lv_obj_t* elapsed = label(parent, duration_text(service_.current_elapsed(mission)).c_str(), &font_es_14, MUTED);
+    lv_obj_t* elapsed = label(parent, duration_text(service_.current_elapsed(mission)).c_str(), &font_es_16, MUTED);
     lv_obj_set_pos(elapsed, 42, 39);
     if (focus) {
-        lv_obj_t* reminder = label(parent, reminder_text(mission).c_str(), &font_es_14, WARNING);
+        lv_obj_t* reminder = label(parent, reminder_text(mission).c_str(), &font_es_16, CYAN);
         lv_obj_set_pos(reminder, 140, 39);
         reminder_labels_.push_back({mission.id, reminder});
-        const int y = is_portrait() ? 82 : 67;
-        button(parent, "INICIAR", 8, y, 82, 38, ActionCode::StartMission, mission.id, 0, nullptr, 0x17384C, CYAN);
-        button(parent, "^", 96, y, 36, 38, ActionCode::MoveUp, mission.id);
-        button(parent, "v", 138, y, 36, 38, ActionCode::MoveDown, mission.id);
-        button(parent, "EDITAR", 180, y, 58, 38, ActionCode::EditMission, mission.id);
-        button(parent, "BORRAR", width - 172, y, 70, 38, ActionCode::AskDelete, mission.id, 0, nullptr,
-               0x321727, DANGER);
-        button(parent, "QUITAR", width - 94, y, 78, 38, ActionCode::RemoveFocus, mission.id);
+        const int y = is_portrait() ? 78 : 62;
+        button(parent, "INICIAR", 8, y, 82, 48, ActionCode::StartMission, mission.id, 0, nullptr, ACCENT_SOFT, CYAN);
+        button(parent, "^", 96, y, 36, 48, ActionCode::MoveUp, mission.id);
+        button(parent, "v", 138, y, 36, 48, ActionCode::MoveDown, mission.id);
+        button(parent, "EDITAR", 180, y, 58, 48, ActionCode::EditMission, mission.id);
+        button(parent, "BORRAR", width - 172, y, 70, 48, ActionCode::AskDelete, mission.id, 0, nullptr,
+               DANGER_SOFT, DANGER);
+        button(parent, "QUITAR", width - 94, y, 78, 48, ActionCode::RemoveFocus, mission.id);
     } else {
-        const int y = is_portrait() ? 82 : 67;
-        button(parent, "INICIAR", 12, y, 94, 38, ActionCode::StartMission, mission.id, 0, nullptr, 0x17384C, CYAN);
-        button(parent, "+ ENFOQUE", 114, y, 108, 38, ActionCode::AddFocus, mission.id);
-        button(parent, "BORRAR", width - 174, y, 72, 38, ActionCode::AskDelete, mission.id, 0, nullptr,
-               0x321727, DANGER);
-        button(parent, "EDITAR", width - 94, y, 78, 38, ActionCode::EditMission, mission.id);
+        const int y = is_portrait() ? 78 : 62;
+        button(parent, "INICIAR", 12, y, 94, 48, ActionCode::StartMission, mission.id, 0, nullptr, ACCENT_SOFT, CYAN);
+        button(parent, "+ ENFOQUE", 114, y, 108, 48, ActionCode::AddFocus, mission.id);
+        button(parent, "BORRAR", width - 174, y, 72, 48, ActionCode::AskDelete, mission.id, 0, nullptr,
+               DANGER_SOFT, DANGER);
+        button(parent, "EDITAR", width - 94, y, 78, 48, ActionCode::EditMission, mission.id);
     }
 }
 
@@ -546,7 +555,7 @@ void AppUi::render_history()
     const int width = lv_display_get_horizontal_resolution(display_);
     const int height = lv_display_get_vertical_resolution(display_);
     render_header(is_portrait());
-    button(screen_, "← VOLVER", 18, 102, 110, 48, ActionCode::CloseHistory);
+    button(screen_, "VOLVER", 18, 102, 110, 48, ActionCode::CloseHistory);
     button(screen_, search_query_.empty() ? "BUSCAR" : truncate(search_query_, 18).c_str(), 140, 102,
            is_portrait() ? 210 : 300, 48, ActionCode::OpenSearch);
     const char* rank_text = rank_filter_ < 0 ? "RANGO: TODOS" : rank_to_string(rank_from_index(rank_filter_));
@@ -586,11 +595,11 @@ void AppUi::render_history()
         std::string meta = clock_.format_local(mission->completed_at_utc, state_.settings.utc_offset_minutes) +
                            "   " + duration_text(mission->elapsed_seconds) + "   +" +
                            std::to_string(mission->xp_awarded) + " XP";
-        lv_obj_t* detail = label(row, meta.c_str(), &font_es_14, MUTED);
+        lv_obj_t* detail = label(row, meta.c_str(), &font_es_16, MUTED);
         lv_obj_set_pos(detail, 48, 43);
-        button(row, "DETALLE", width - 276, 26, 92, 46, ActionCode::ShowDetail, mission->id);
-        button(row, "ELIMINAR", width - 174, 26, 92, 46, ActionCode::AskDelete, mission->id, 0, nullptr,
-               0x321727, DANGER);
+        button(row, "DETALLE", width - 276, 24, 92, 48, ActionCode::ShowDetail, mission->id);
+        button(row, "ELIMINAR", width - 174, 24, 92, 48, ActionCode::AskDelete, mission->id, 0, nullptr,
+               DANGER_SOFT, DANGER);
         y += row_height + 12;
     }
     if (completed.empty()) {
@@ -637,14 +646,14 @@ void AppUi::render_editor(bool search_only)
         for (int index = 0; index < 6; ++index) {
             const MissionRank rank = rank_from_index(index);
             button(screen_, rank_to_string(rank), 92 + index * 58, 258, 48, 48, ActionCode::SelectRank, 0, index,
-                   nullptr, editor_rank_ == rank ? 0x273653 : PANEL_ALT,
+                   nullptr, editor_rank_ == rank ? ACCENT_SOFT : PANEL_ALT,
                    editor_rank_ == rank ? rank_color(rank) : LINE);
         }
         lv_obj_t* reminder_caption = label(screen_, "RECORDATORIO", &font_es_16, CYAN);
         lv_obj_set_pos(reminder_caption, 470, 266);
         button(screen_, editor_reminder_enabled_ ? "ACTIVO" : "APAGADO", 610, 258, 100, 48,
-               ActionCode::ReminderToggle, 0, 0, nullptr, editor_reminder_enabled_ ? 0x183D38 : PANEL_ALT,
-               editor_reminder_enabled_ ? SUCCESS : LINE);
+               ActionCode::ReminderToggle, 0, 0, nullptr, editor_reminder_enabled_ ? ACCENT_SOFT : PANEL_ALT,
+               editor_reminder_enabled_ ? CYAN : LINE);
         button(screen_, "-", 722, 258, 46, 48, ActionCode::ReminderMinus);
         char minutes[32];
         std::snprintf(minutes, sizeof(minutes), "%u MIN", editor_reminder_minutes_);
@@ -662,7 +671,7 @@ void AppUi::render_editor(bool search_only)
 
     button(screen_, "MICRÓFONO", 20, height - 62, 150, 48, ActionCode::DictationInfo);
     button(screen_, search_only ? "APLICAR BÚSQUEDA" : "GUARDAR MISIÓN", width - 216, height - 62, 198, 48,
-           search_only ? ActionCode::ApplySearch : ActionCode::SaveMission, 0, 0, nullptr, 0x17384C, CYAN);
+           search_only ? ActionCode::ApplySearch : ActionCode::SaveMission, 0, 0, nullptr, ACCENT_SOFT, CYAN);
 
     set_active_textarea(title_textarea_);
 }
@@ -678,7 +687,7 @@ lv_obj_t* AppUi::spanish_keyboard(int x, int y, int width, int height)
     lv_obj_set_style_bg_color(matrix, color(PANEL), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(matrix, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_border_width(matrix, 0, LV_PART_MAIN);
-    lv_obj_set_style_radius(matrix, 6, LV_PART_MAIN);
+    lv_obj_set_style_radius(matrix, theme::RadiusPanel, LV_PART_MAIN);
     lv_obj_set_style_pad_all(matrix, 6, LV_PART_MAIN);
     lv_obj_set_style_pad_row(matrix, 6, LV_PART_MAIN);
     lv_obj_set_style_pad_column(matrix, 6, LV_PART_MAIN);
@@ -686,14 +695,14 @@ lv_obj_t* AppUi::spanish_keyboard(int x, int y, int width, int height)
     lv_obj_set_style_bg_color(matrix, color(PANEL_ALT), LV_PART_ITEMS);
     lv_obj_set_style_bg_opa(matrix, LV_OPA_COVER, LV_PART_ITEMS);
     lv_obj_set_style_border_color(matrix, color(LINE), LV_PART_ITEMS);
-    lv_obj_set_style_border_width(matrix, 1, LV_PART_ITEMS);
-    lv_obj_set_style_radius(matrix, 5, LV_PART_ITEMS);
+    lv_obj_set_style_border_width(matrix, theme::BorderWidth, LV_PART_ITEMS);
+    lv_obj_set_style_radius(matrix, theme::RadiusControl, LV_PART_ITEMS);
     lv_obj_set_style_text_font(matrix, &font_es_20, LV_PART_ITEMS);
     lv_obj_set_style_text_color(matrix, color(TEXT), LV_PART_ITEMS);
     lv_obj_set_style_bg_color(matrix, color(VIOLET), static_cast<lv_style_selector_t>(LV_PART_ITEMS) |
                                                        static_cast<lv_style_selector_t>(LV_STATE_PRESSED));
     // La tecla de mayusculas se resalta mientras esta activa.
-    lv_obj_set_style_bg_color(matrix, color(0x20365A), static_cast<lv_style_selector_t>(LV_PART_ITEMS) |
+    lv_obj_set_style_bg_color(matrix, color(ACCENT_SOFT), static_cast<lv_style_selector_t>(LV_PART_ITEMS) |
                                                        static_cast<lv_style_selector_t>(LV_STATE_CHECKED));
     lv_obj_set_style_border_color(matrix, color(CYAN), static_cast<lv_style_selector_t>(LV_PART_ITEMS) |
                                                        static_cast<lv_style_selector_t>(LV_STATE_CHECKED));
@@ -810,18 +819,18 @@ void AppUi::render_clock_setup()
     const int minutes = std::abs(state_.settings.utc_offset_minutes % 60);
     std::snprintf(offset, sizeof(offset), "UTC%+d:%02d", hours, minutes);
     button(screen_, "-", 30, action_y, 64, 64, ActionCode::ClockOffsetMinus);
-    lv_obj_t* offset_label = label(screen_, offset, &font_es_20, WARNING);
+    lv_obj_t* offset_label = label(screen_, offset, &font_es_20, CYAN);
     lv_obj_set_pos(offset_label, 114, action_y + 21);
     button(screen_, "+", 246, action_y, 64, 64, ActionCode::ClockOffsetPlus);
-    lv_obj_t* step_hint = label(screen_, "Pasos de 30 min", &font_es_14, MUTED);
+    lv_obj_t* step_hint = label(screen_, "Pasos de 30 min", &font_es_16, MUTED);
     lv_obj_set_pos(step_hint, 330, action_y + 25);
     button(screen_, "GUARDAR Y CONTINUAR", width - 372, action_y, 340, 64, ActionCode::SaveClock, 0, 0, nullptr,
-           0x17384C, CYAN);
+           ACCENT_SOFT, CYAN);
 
     lv_obj_t* note = label(screen_,
                            "Valor inicial: fecha de compilación del firmware. La hora solo fecha los intervalos; el "
                            "cronómetro mide con el reloj monotónico.",
-                           &font_es_14, MUTED);
+                           &font_es_16, MUTED);
     lv_obj_set_pos(note, 32, height - 74);
     lv_obj_set_width(note, width - 380);
 }
@@ -833,15 +842,16 @@ lv_obj_t* AppUi::clock_roller(int x, int y, int width, const std::string& option
     lv_obj_set_width(roller, width);
     lv_roller_set_options(roller, options.c_str(), LV_ROLLER_MODE_INFINITE);
     lv_roller_set_visible_row_count(roller, kClockVisibleRows);
+    lv_obj_set_style_text_line_space(roller, kClockRollerLineSpace, LV_PART_MAIN);
     lv_obj_set_height(roller, clock_roller_height());
     lv_obj_set_style_bg_color(roller, color(PANEL_ALT), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(roller, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_border_color(roller, color(LINE), LV_PART_MAIN);
-    lv_obj_set_style_border_width(roller, 1, LV_PART_MAIN);
-    lv_obj_set_style_radius(roller, 5, LV_PART_MAIN);
+    lv_obj_set_style_border_width(roller, theme::BorderWidth, LV_PART_MAIN);
+    lv_obj_set_style_radius(roller, theme::RadiusControl, LV_PART_MAIN);
     lv_obj_set_style_text_font(roller, &font_es_28, LV_PART_MAIN);
     lv_obj_set_style_text_color(roller, color(MUTED), LV_PART_MAIN);
-    lv_obj_set_style_bg_color(roller, color(0x20365A), LV_PART_SELECTED);
+    lv_obj_set_style_bg_color(roller, color(ACCENT_SOFT), LV_PART_SELECTED);
     lv_obj_set_style_bg_opa(roller, LV_OPA_COVER, LV_PART_SELECTED);
     lv_obj_set_style_text_font(roller, &font_es_28, LV_PART_SELECTED);
     lv_obj_set_style_text_color(roller, color(TEXT), LV_PART_SELECTED);
@@ -902,7 +912,7 @@ void AppUi::render_screen_off()
 {
     lv_obj_t* shade = lv_obj_create(screen_);
     place(shade, 0, 0, lv_display_get_horizontal_resolution(display_), lv_display_get_vertical_resolution(display_));
-    lv_obj_set_style_bg_color(shade, color(0x000000), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(shade, color(SCRIM), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(shade, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_border_width(shade, 0, LV_PART_MAIN);
     lv_obj_remove_flag(shade, LV_OBJ_FLAG_SCROLLABLE);
@@ -916,7 +926,7 @@ void AppUi::render_overlay()
     const int height = lv_display_get_vertical_resolution(display_);
     lv_obj_t* shade = lv_obj_create(screen_);
     place(shade, 0, 0, width, height);
-    lv_obj_set_style_bg_color(shade, color(0x000000), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(shade, color(SCRIM), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(shade, LV_OPA_70, LV_PART_MAIN);
     lv_obj_set_style_border_width(shade, 0, LV_PART_MAIN);
     lv_obj_remove_flag(shade, LV_OBJ_FLAG_SCROLLABLE);
@@ -956,7 +966,7 @@ void AppUi::render_overlay()
     }
 
     lv_obj_t* heading = label(box, title_text.c_str(), &font_es_28,
-                              overlay_ == Overlay::Reward ? WARNING : CYAN);
+                              overlay_ == Overlay::Reward ? GOLD : CYAN);
     lv_obj_set_width(heading, box_width - 48);
     lv_obj_set_pos(heading, 24, 24);
     if (overlay_ == Overlay::Reward) {
@@ -978,22 +988,22 @@ void AppUi::render_overlay()
     const int y = box_height - 70;
     if (overlay_ == Overlay::Tutorial) {
         button(box, "COMENZAR", box_width - 178, y, 150, 48, ActionCode::FinishTutorial, 0, 0, nullptr,
-               0x17384C, CYAN);
+               ACCENT_SOFT, CYAN);
     } else if (overlay_ == Overlay::Reward) {
         if (suggested_next_id_ != 0)
             button(box, "INICIAR SIGUIENTE", 24, y, 184, 48, ActionCode::StartSuggested, suggested_next_id_, 0,
-                   nullptr, 0x17384C, CYAN);
+                   nullptr, ACCENT_SOFT, CYAN);
         button(box, "VOLVER", box_width - 144, y, 116, 48, ActionCode::CloseOverlay);
     } else if (overlay_ == Overlay::Reminder) {
         button(box, "RETOMAR", 24, y, 126, 48, ActionCode::ReminderResume, overlay_mission_id_, 0, nullptr,
-               0x17384C, CYAN);
+               ACCENT_SOFT, CYAN);
         button(box, "+5 MIN", 160, y, 112, 48, ActionCode::ReminderSnooze, overlay_mission_id_);
         button(box, "CANCELAR AVISO", box_width - 180, y, 152, 48, ActionCode::ReminderCancel,
                overlay_mission_id_);
     } else if (overlay_ == Overlay::ConfirmDelete) {
         button(box, "CONSERVAR", 24, y, 130, 48, ActionCode::CloseOverlay);
         button(box, "ELIMINAR", box_width - 144, y, 116, 48, ActionCode::ConfirmDelete, overlay_mission_id_, 0,
-               nullptr, 0x321727, DANGER);
+               nullptr, DANGER_SOFT, DANGER);
     } else {
         button(box, "CERRAR", box_width - 144, y, 116, 48, ActionCode::CloseOverlay);
     }

@@ -4,6 +4,7 @@
 #include "model.hpp"
 #include "repository.hpp"
 #include "services.hpp"
+#include "theme.hpp"
 
 #include <memory>
 #include <string>
@@ -101,8 +102,8 @@ private:
     lv_obj_t* panel(lv_obj_t* parent, int x, int y, int width, int height, bool scrollable = false);
     lv_obj_t* label(lv_obj_t* parent, const char* text, const lv_font_t* font, uint32_t color);
     lv_obj_t* button(lv_obj_t* parent, const char* text, int x, int y, int width, int height, ActionCode code,
-                     MissionId id = 0, int value = 0, const char* action_text = nullptr, uint32_t background = 0x111B34,
-                     uint32_t border = 0x2B4169);
+                     MissionId id = 0, int value = 0, const char* action_text = nullptr,
+                     uint32_t background = theme::SurfaceAlt, uint32_t border = theme::Border);
     lv_obj_t* clock_roller(int x, int y, int width, const std::string& options, int selected);
     lv_obj_t* spanish_keyboard(int x, int y, int width, int height);
     void handle_key(const char* text);
