@@ -1,27 +1,24 @@
 # El Sistema
 
-Firmware para el kit de desarrollo **M5Stack Tab5 (ESP32-P4)**. El primer
-módulo implementa una interfaz de productividad basada en misiones, Zona de
-Enfoque, medición de tiempo y recompensas de experiencia.
+Firmware local para el **M5Stack Tab5 (ESP32‑P4)**. El módulo de productividad
+convierte tareas en misiones, conserva el tiempo real de trabajo, administra
+una Zona de Enfoque y concede experiencia al completar objetivos.
 
-El proyecto utiliza:
+## Estado: v0.2.0
 
-- ESP-IDF 5.4.2
-- LVGL 9.2.2
-- BSP de M5Stack Tab5
-- Pantalla táctil MIPI-DSI en orientación horizontal
+El MVP ya incluye creación y edición de misiones, teclado español, cronómetro
+por intervalos, recordatorios visuales, XP y niveles, historial consultable,
+persistencia SPIFFS/NVS, RTC y rotación automática. Funciona completamente sin
+red.
 
-El código del dispositivo y las instrucciones de compilación están en
-[`firmware/`](firmware/).
+La configuración estable del display MIPI‑DSI, táctil, PSRAM, rotación PPA y
+fuentes españolas se mantiene dentro del proyecto ESP-IDF 5.4.2.
 
-## Estado actual
+Consulta [firmware/README.md](firmware/README.md) para arquitectura,
+compilación, flasheo y validación en el dispositivo.
 
-- Inicialización del display y panel táctil.
-- Dashboard nativo de El Sistema.
-- Cronómetro monotónico por misión.
-- Pausar, reanudar, alternar y completar misiones.
-- Cálculo de XP.
-- Fuentes con soporte Latin-1 para textos en español.
+## Próximas versiones
 
-La persistencia, creación de misiones, historial completo y servicios de audio
-se incorporarán en las siguientes iteraciones.
+- `v0.3.0`: captura/reproducción y avisos hablados locales.
+- `v0.4.0`: dictado español privado con Whisper en la red local.
+- `v0.5.0`: copias de seguridad, OTA y endurecimiento de seguridad.
