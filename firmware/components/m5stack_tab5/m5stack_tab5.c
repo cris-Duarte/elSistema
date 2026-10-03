@@ -748,7 +748,8 @@ esp_err_t bsp_audio_init(const i2s_std_config_t* i2s_config)
     /* Setup I2S peripheral */
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(CONFIG_BSP_I2S_NUM, I2S_ROLE_MASTER);
     chan_cfg.auto_clear        = true;  // Auto clear the legacy data in the DMA buffer
-    ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &i2s_tx_chan, &i2s_rx_chan));
+    esp_err_t err = i2s_new_channel(&chan_cfg, &i2s_tx_chan, &i2s_rx_chan);
+    if (err != ESP_OK) return err;
 
     /* Setup I2S channels */
     // const i2s_std_config_t std_cfg_default = BSP_I2S_DUPLEX_MONO_CFG(16000);
@@ -759,8 +760,10 @@ esp_err_t bsp_audio_init(const i2s_std_config_t* i2s_config)
     }
 
     if (i2s_tx_chan != NULL) {
-        ESP_ERROR_CHECK(i2s_channel_init_std_mode(i2s_tx_chan, p_i2s_cfg));
-        ESP_ERROR_CHECK(i2s_channel_enable(i2s_tx_chan));
+        err = i2s_channel_init_std_mode(i2s_tx_chan, p_i2s_cfg);
+        if (err != ESP_OK) return err;
+        err = i2s_channel_enable(i2s_tx_chan);
+        if (err != ESP_OK) return err;
     }
 
     // if (i2s_rx_chan != NULL) {
@@ -793,8 +796,10 @@ esp_err_t bsp_audio_init(const i2s_std_config_t* i2s_config)
     };
 
     if (i2s_rx_chan != NULL) {
-        ESP_ERROR_CHECK(i2s_channel_init_tdm_mode(i2s_rx_chan, &tdm_cfg));
-        ESP_ERROR_CHECK(i2s_channel_enable(i2s_rx_chan));
+        err = i2s_channel_init_tdm_mode(i2s_rx_chan, &tdm_cfg);
+        if (err != ESP_OK) return err;
+        err = i2s_channel_enable(i2s_rx_chan);
+        if (err != ESP_OK) return err;
     }
 
     audio_codec_i2s_cfg_t i2s_cfg = {
@@ -816,11 +821,11 @@ esp_codec_dev_handle_t bsp_audio_codec_speaker_init(void)
 
     if (i2s_data_if == NULL) {
         /* Initilize I2C */
-        bsp_i2c_init();
+        if (bsp_i2c_init() != ESP_OK) return NULL;
         /* Configure I2S peripheral and Power Amplifier */
-        bsp_audio_init(NULL);
+        if (bsp_audio_init(NULL) != ESP_OK) return NULL;
     }
-    assert(i2s_data_if);
+    if (i2s_data_if == NULL) return NULL;
 
     const audio_codec_gpio_if_t* gpio_if = audio_codec_new_gpio();
 
@@ -862,12 +867,12 @@ esp_codec_dev_handle_t bsp_audio_codec_microphone_init(void)
 {
     if (i2s_data_if == NULL) {
         /* Initilize I2C */
-        ESP_ERROR_CHECK(bsp_i2c_init());
+        if (bsp_i2c_init() != ESP_OK) return NULL;
         /* Configure I2S peripheral and Power Amplifier */
-        ESP_ERROR_CHECK(bsp_audio_init(NULL));
+        if (bsp_audio_init(NULL) != ESP_OK) return NULL;
         // i2s_data_if = bsp_get_codec_data_if();
     }
-    assert(i2s_data_if);
+    if (i2s_data_if == NULL) return NULL;
 
     i2c_master_bus_handle_t i2c_bus_handle = bsp_i2c_get_handle();
     audio_codec_i2c_cfg_t i2c_cfg          = {
@@ -897,18 +902,20 @@ esp_codec_dev_handle_t bsp_audio_codec_microphone_init(void)
 
 static esp_err_t bsp_i2s_read(void* audio_buffer, size_t len, size_t* bytes_read, uint32_t timeout_ms)
 {
-    esp_err_t ret = ESP_OK;
-    ret           = esp_codec_dev_read(record_dev_handle, audio_buffer, len);
-    *bytes_read   = len;
-    return ret;
+    if (audio_buffer == NULL || bytes_read == NULL || record_dev_handle == NULL || i2s_rx_chan == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *bytes_read = 0;
+    return i2s_channel_read(i2s_rx_chan, audio_buffer, len, bytes_read, pdMS_TO_TICKS(timeout_ms));
 }
 
 static esp_err_t bsp_i2s_write(void* audio_buffer, size_t len, size_t* bytes_written, uint32_t timeout_ms)
 {
-    esp_err_t ret  = ESP_OK;
-    ret            = esp_codec_dev_write(play_dev_handle, audio_buffer, len);
-    *bytes_written = len;
-    return ret;
+    if (audio_buffer == NULL || bytes_written == NULL || play_dev_handle == NULL || i2s_tx_chan == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *bytes_written = 0;
+    return i2s_channel_write(i2s_tx_chan, audio_buffer, len, bytes_written, pdMS_TO_TICKS(timeout_ms));
 }
 
 static esp_err_t bsp_codec_set_in_gain(float gain)
@@ -989,17 +996,31 @@ static esp_err_t bsp_codec_es7210_set(uint32_t rate, uint32_t bps, i2s_slot_mode
 
 void bsp_codec_init(void)
 {
+    (void)bsp_codec_try_init();
+}
+
+bool bsp_codec_try_init(void)
+{
     play_dev_handle = bsp_audio_codec_speaker_init();
-    assert((play_dev_handle) && "play_dev_handle not initialized");
+    if (play_dev_handle == NULL) {
+        ESP_LOGE(TAG, "No se pudo inicializar ES8388");
+        return false;
+    }
 
     record_dev_handle = bsp_audio_codec_microphone_init();
-    assert((record_dev_handle) && "record_dev_handle not initialized");
+    if (record_dev_handle == NULL) {
+        ESP_LOGE(TAG, "No se pudo inicializar ES7210");
+        return false;
+    }
 
     // bsp_codec_es7210_set(16000, 16, 2);
     // bsp_codec_es8388_set(16000, 16, 2);
     // bsp_codec_es7210_set(48000, 16, 2);
-    bsp_codec_es7210_set(48000, 16, 4);
-    bsp_codec_es8388_set(48000, 16, 2);
+    if (bsp_codec_es7210_set(48000, 16, 4) != ESP_CODEC_DEV_OK ||
+        bsp_codec_es8388_set(48000, 16, 2) != ESP_CODEC_DEV_OK) {
+        ESP_LOGE(TAG, "No se pudo abrir el flujo de audio");
+        return false;
+    }
 
     /* 初始化 codec handle */
     bsp_codec_config_t* codec_cfg  = bsp_get_codec_handle();  // 获取 codec handle
@@ -1013,6 +1034,13 @@ void bsp_codec_init(void)
     codec_cfg->i2s_reconfig_clk_fn = bsp_codec_es8388_set;
 
     codec_cfg->set_volume(80);
+    return true;
+}
+
+bool bsp_codec_ready(void)
+{
+    return play_dev_handle != NULL && record_dev_handle != NULL &&
+           g_codec_handle.i2s_read != NULL && g_codec_handle.i2s_write != NULL;
 }
 
 uint8_t bsp_codec_feed_channel(void)

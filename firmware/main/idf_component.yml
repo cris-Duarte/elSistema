@@ -1,2 +1,9 @@
 dependencies:
   espressif/bmi270_sensor: "^0.4.0"
+  # Capa de API Wi-Fi para chips anfitriones sin radio propia.
+  espressif/esp_wifi_remote: "=0.5.1"
+  # El ESP32-P4 no tiene radio. Esta version coincide con la generacion 1.4.x
+  # del firmware SDIO que M5Stack instala de fabrica en el ESP32-C6 del Tab5.
+  espressif/esp_hosted: "=1.4.1"
+  # Descubrimiento automático del MacBook que anuncia whisper-server.
+  espressif/mdns: "=1.13.1"

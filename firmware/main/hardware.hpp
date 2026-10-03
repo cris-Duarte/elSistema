@@ -18,6 +18,8 @@ public:
     int64_t now_utc() const;
     bool set_local(int year, int month, int day, int hour, int minute, int utc_offset_minutes);
     std::string format_local(int64_t utc, int utc_offset_minutes, bool include_time = true) const;
+    // Reloj compacto para la barra superior: "HH:MM DD/MM/AAAA".
+    std::string format_status(int64_t utc, int utc_offset_minutes) const;
 
 private:
     bool read_rtc(std::tm& value);
@@ -42,6 +44,28 @@ private:
 };
 
 enum class ButtonEvent : uint8_t { None, ShortPress, LongPress };
+
+// Estado de energía para la barra superior. battery_mv < 0 significa que el
+// monitor INA226 no respondió o no hay batería instalada y el porcentaje no
+// se conoce (el equipo, si está encendido, corre por USB).
+struct PowerStatus {
+    bool charging = false;  // CHG_STAT del IP2326: hay alimentación externa
+    int battery_mv = -1;
+    int battery_pct = -1;
+};
+
+// Energía del Tab5. El monitor INA226 (I2C 0x41) mide el bus de batería
+// (NP-F550 extraíble de dos celdas) y el estado de carga sale del pin CHG_STAT
+// del expansor E2. Fórmula de nivel de M5Unified: por celda 3300–4100 mV.
+class PowerService {
+public:
+    bool init(i2c_master_bus_handle_t bus);
+    PowerStatus poll();
+    bool available() const { return monitor_ != nullptr; }
+
+private:
+    i2c_master_dev_handle_t monitor_ = nullptr;
+};
 
 // Boton fisico del Tab5. El unico legible por software es el boton BOOT
 // (GPIO35): el boton de encendido es un latch de hardware que el ESP32-P4 no

@@ -1,7 +1,9 @@
-# El Sistema v0.2.0 — firmware para M5Stack Tab5
+# El Sistema v0.4.2 — firmware para M5Stack Tab5
 
 MVP local del módulo de productividad, construido con ESP-IDF 5.4.2, el BSP
-oficial de M5Stack Tab5 y LVGL 9.2.2. No requiere Wi‑Fi ni servicios externos.
+oficial de M5Stack Tab5 y LVGL 9.2.2. El dictado requiere además
+Wi-Fi local y el servidor del MacBook (`tools/whisper/`); sin red la app
+sigue funcionando con teclado.
 
 ## Funciones incluidas
 
@@ -20,11 +22,27 @@ oficial de M5Stack Tab5 y LVGL 9.2.2. No requiere Wi‑Fi ni servicios externos.
 - RTC RX8130CE con configuración inicial por ruedas deslizables (día, mes, año,
   hora y minuto, sin teclado), y rotación automática con BMI270 después de
   800 ms de orientación estable.
+- Barra superior de estado (siempre visible): reloj local, control táctil de
+  conectividad de 44 px con estados `BUSCANDO RED`, `CONECTANDO`, SSID,
+  `BUSCANDO MAC`, `LISTO` o `SIN CONEXIÓN`, y energía (`USB · BAT %`
+  cargando, `BAT %` con batería, `USB` solo sin batería instalada). El
+  porcentaje usa la fórmula de M5Unified (por celda 3300–4100 mV, lineal
+  aproximada) sobre el monitor INA226.
 - Composiciones horizontal y vertical. La rotación se bloquea durante el
   teclado y los diálogos.
+- Módulo experimental `ASISTENTE · A2` con personaje original, rostro dibujado
+  por LVGL y máquina de estados no bloqueante. `HABLAR` realiza un turno real:
+  captura por micrófono, transcripción local con Whisper y confirmación hablada
+  integrada. La respuesta aún es determinista; no hay IA conversacional,
+  memoria ni funciones sociales.
 
-El botón de micrófono muestra `Dictado no configurado`. Audio local está
-reservado para v0.3.0 y el dictado privado mediante Whisper para v0.4.0.
+El botón MIC abre el dictado: graba (hasta 30 s, parada por segundo toque o
+3 s de silencio después de detectar voz), muestra nivel y RMS por slot TDM, envía el WAV a
+`POST http://<mac-descubierto>:8080/inference` y abre el editor con la transcripción como
+título editable. Aun sin configurar Wi-Fi permite hacer una captura local,
+identifica los dos slots de micrófono y el de referencia, y reproduce la muestra
+por el altavoz para diagnosticar el audio. El teclado sigue disponible siempre.
+Detalle del servidor en `tools/whisper/README.md`.
 
 ## Arquitectura
 
@@ -32,6 +50,18 @@ reservado para v0.3.0 y el dictado privado mediante Whisper para v0.4.0.
 - `services.*`: misiones, Zona de Enfoque, cronómetro, recordatorios y XP.
 - `repository.*`: JSON/SPIFFS, respaldo atómico, migración y NVS.
 - `hardware.*`: RTC y sensor de orientación.
+- `audio.*`: ES7210/ES8388, diagnóstico TDM, FIR 48→16 kHz, PCM y WAV en PSRAM.
+- `audio_session.*`: propietario único del codec para dictado, asistente y avisos.
+- `assistant.*`: máquina de estados visual del personaje.
+- `assistant_voice.*`: coordinador A2 de captura, transcripción y respuesta
+  local; no llama a LVGL desde su worker.
+- `assets/assistant_character.*`: personaje original optimizado para LVGL; las
+  expresiones se superponen en tiempo real para evitar almacenar varios sprites.
+- `ble.*`: prueba A0 de NimBLE sobre ESP-Hosted/VHCI, sin credenciales ni acciones.
+- `connectivity.*`: ESP-Hosted/SDIO, hasta ocho perfiles Wi-Fi en NVS,
+  reconexión priorizada y descubrimiento Bonjour/mDNS del Mac.
+- `transcription.*` y `dictation.*`: cliente Whisper y máquina de estados sin
+  llamadas a LVGL desde tareas de captura o red.
 - `ui.*`: pantallas LVGL y traducción de acciones táctiles a servicios.
 - `app_main.cpp`: composición e inicio del dispositivo.
 
@@ -69,9 +99,11 @@ mismo Python en lugar de hacer `fullclean`:
 ## Pruebas de dominio
 
 Las pruebas viven en `main/test/test_domain.cpp` (componente `test`) y cubren XP,
-niveles, búsqueda con acentos y localización de misiones. **No** forman parte del
-build normal: se activan con una opción de CMake y el firmware las ejecuta al
-arrancar, antes de tocar hardware o almacenamiento, en una tarea propia.
+niveles, búsqueda con acentos, límites UTF-8, remuestreo 48→16 kHz, WAV, análisis
+de Whisper, serialización de perfiles, prioridad de redes y selección de Mac.
+**No** forman parte del build normal: se activan con
+una opción de CMake y el firmware las ejecuta al arrancar, antes de tocar hardware
+o almacenamiento, en una tarea propia.
 
 ```bash
 cd firmware
@@ -82,7 +114,7 @@ idf.py -p /dev/tty.usbmodem2101 -DEL_SISTEMA_TESTS=ON flash monitor
 El resultado se informa por el log de IDF, prueba por prueba:
 
 ```
-I (1125) el_sistema: Pruebas de dominio registradas: 4
+I (1125) el_sistema: Pruebas de dominio registradas: 20
 I (1155) el_sistema:   XP aplica bases, minutos completos y límite temporal      OK
 I (1174) el_sistema:   una recompensa puede subir varios niveles                  OK
 I (1198) el_sistema:   la búsqueda ignora mayúsculas y acentos españoles       OK
@@ -121,6 +153,31 @@ El puerto puede cambiar. Para salir del monitor usa `Ctrl + ]`.
 4. Reinicia durante una misión; debe reaparecer pausada y conservar el último
    checkpoint (pérdida máxima aproximada: 30 segundos).
 5. Verifica recordatorios, XP, historial, búsqueda y ambas orientaciones.
+6. Comprueba la barra superior: el reloj avanza cada minuto, el control Wi-Fi
+   abre `CONECTIVIDAD` y al enchufar/desenchufar el USB-C aparece `USB`.
+7. Sin configurar Wi-Fi, toca MIC, dicta una frase y detén la captura. Debe
+   aparecer `Muestra local`, el mapa `MIC Sx/Sy · REF Sz` y `REPRODUCIR` debe
+   emitir la muestra sin congelar la interfaz.
+8. Guarda al menos dos redes y comprueba prioridad, cambio automático y olvido.
+   Ejecuta `tools/whisper/servidor.sh`: el Mac debe aparecer automáticamente en
+   `CONECTIVIDAD → MACBOOK`, sin introducir IP ni puerto. Verifica grabación,
+   transcripción, edición y descarte. La misión solo debe existir después de
+   pulsar `Guardar`.
+9. Apaga el servidor y repite: el audio debe permanecer únicamente en PSRAM y
+   ofrecer `Reintentar` o `Descartar` sin afectar el cronómetro activo.
+10. En `CONECTIVIDAD → ESTADO` comprueba `BLUETOOTH · PRUEBA A0`. Desde una
+    aplicación BLE genérica busca `El Sistema`, conecta y escribe `ping` en la
+    única característica. El contador `PINGS` debe aumentar sin perder Wi-Fi.
+    El servicio de diagnóstico es `01000000-6c65-2d73-6973-74616d657a10` y su
+    característica de lectura/escritura es
+    `02000000-6c65-2d73-6973-74616d657a10`. Al leerla devuelve estado, contador
+    y RAM interna libre/mínima en JSON.
+11. Con `tools/whisper/servidor.sh` activo, abre `ASISTENTE` y toca `HABLAR` o
+    el personaje. Di una frase y detén la captura: debe recorrer `ESCUCHANDO`,
+    `TRANSCRIBIENDO` y `RESPONDIENDO`, mostrar lo entendido y reproducir
+    “Te escucho. El canal de voz está listo.” sin congelar la interfaz. Repite
+    con una misión activa y confirma que su cronómetro continúa. `CICLO VISUAL`
+    y `CELEBRAR` siguen disponibles como diagnósticos locales.
 
 No borres ni reformatees SPIFFS durante estas pruebas: allí vive el estado del
 MVP.

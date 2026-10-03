@@ -202,6 +202,10 @@ typedef struct {
 } bsp_codec_config_t;
 
 void bsp_codec_init(void);
+/** Inicializa ambos codecs sin abortar la aplicacion si el audio no responde. */
+bool bsp_codec_try_init(void);
+/** Indica si captura y reproduccion quedaron disponibles. */
+bool bsp_codec_ready(void);
 bsp_codec_config_t *bsp_get_codec_handle(void);
 uint8_t bsp_codec_feed_channel(void);
 

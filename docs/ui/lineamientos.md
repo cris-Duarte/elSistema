@@ -27,6 +27,14 @@ estilo RPG. Ya existen código, pantallas y componentes implementados.
   componentes que ya existen; extender y normalizar los existentes.
 - Reutilizar assets ya embebidos (fuentes, imágenes, estilos). No introducir
   fuentes nuevas salvo necesidad real documentada.
+
+  > **Necesidad documentada (iteración 2).** Se introdujeron Rajdhani SemiBold y
+  > Poppins Regular porque este mismo apartado pide una fuente
+  > geométrica/futurista para los elementos del Sistema y texto corrido legible
+  > para el contenido, y Montserrat cubría ambos roles con una sola voz.
+  > Procedencia, cobertura, licencia y regla de asignación en
+  > `firmware/main/fonts/README.md`.
+
 - Preservar comportamientos, flujos y datos existentes: este documento cambia
   cómo se ve y se siente la app, no qué hace.
 

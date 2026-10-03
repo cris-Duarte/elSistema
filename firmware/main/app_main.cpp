@@ -1,4 +1,12 @@
 #include "hardware.hpp"
+#include "assistant.hpp"
+#include "assistant_voice.hpp"
+#include "audio.hpp"
+#include "audio_session.hpp"
+#include "ble.hpp"
+#include "connectivity.hpp"
+#include "dictation.hpp"
+#include "transcription.hpp"
 #include "model.hpp"
 #include "repository.hpp"
 #include "services.hpp"
@@ -74,6 +82,15 @@ el_sistema::MissionRepository repository;
 el_sistema::ClockService clock_service;
 el_sistema::OrientationService orientation_service;
 el_sistema::ButtonService button_service;
+el_sistema::PowerService power_service;
+el_sistema::AssistantService assistant_service;
+el_sistema::AudioService audio_service;
+el_sistema::AudioSessionManager audio_sessions;
+el_sistema::ConnectivityService connectivity_service;
+el_sistema::BleService ble_service;
+el_sistema::TranscriptionService transcription_service;
+std::unique_ptr<el_sistema::DictationService> dictation_service;
+std::unique_ptr<el_sistema::AssistantVoiceService> assistant_voice_service;
 std::unique_ptr<el_sistema::ApplicationService> application;
 std::unique_ptr<el_sistema::AppUi> ui;
 
@@ -104,7 +121,7 @@ lv_display_t* start_display()
 
 extern "C" void app_main(void)
 {
-    ESP_LOGI(TAG, "Iniciando El Sistema v0.2.0");
+    ESP_LOGI(TAG, "Iniciando El Sistema v0.4.2 · Asistente A2");
 
 #ifdef EL_SISTEMA_RUN_TESTS
     ESP_LOGI(TAG, "Modo de pruebas activado: ejecutando pruebas de dominio");
@@ -124,15 +141,28 @@ extern "C" void app_main(void)
     clock_service.init(bsp_i2c_get_handle());
     orientation_service.init(bsp_i2c_get_handle());
     button_service.init(bsp_i2c_get_handle());
+    power_service.init(bsp_i2c_get_handle());
     application = std::make_unique<el_sistema::ApplicationService>(state, repository, clock_service);
+    dictation_service = std::make_unique<el_sistema::DictationService>(audio_service, audio_sessions,
+                                                                       connectivity_service, ble_service,
+                                                                       transcription_service);
+    if (!dictation_service->init()) ESP_LOGE(TAG, "No se pudo iniciar el coordinador de dictado");
+    assistant_voice_service = std::make_unique<el_sistema::AssistantVoiceService>(audio_service, audio_sessions,
+                                                                                  *dictation_service);
+    if (!assistant_voice_service->init()) ESP_LOGE(TAG, "No se pudo iniciar el coordinador de voz del asistente");
     if (!restored) application->seed_first_run();
 
     lv_display_t* display = start_display();
     ui = std::make_unique<el_sistema::AppUi>(state, *application, repository, clock_service, orientation_service,
-                                             button_service);
+                                             button_service, *dictation_service, power_service, assistant_service,
+                                             *assistant_voice_service);
     bsp_display_lock(0);
     ui->start(display);
     bsp_display_unlock();
+
+    // El enlace P4-C6 y los escaneos pueden tardar varios segundos. Arrancan
+    // únicamente cuando LVGL ya mostró la interfaz y siempre en el worker.
+    dictation_service->start_connectivity();
 
     ESP_LOGI(TAG, "Interfaz y servicios listos");
 }

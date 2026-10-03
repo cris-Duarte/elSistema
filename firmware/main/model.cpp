@@ -66,4 +66,26 @@ const Mission* find_mission(const AppState& state, MissionId id)
     return nullptr;
 }
 
+size_t utf8_codepoint_count(const std::string& text)
+{
+    size_t count = 0;
+    for (const unsigned char byte : text) {
+        if ((byte & 0xC0U) != 0x80U) ++count;
+    }
+    return count;
+}
+
+std::string utf8_truncate(const std::string& text, size_t max_codepoints)
+{
+    if (utf8_codepoint_count(text) <= max_codepoints) return text;
+    size_t count = 0;
+    size_t end = 0;
+    while (end < text.size() && count < max_codepoints) {
+        ++end;
+        while (end < text.size() && (static_cast<unsigned char>(text[end]) & 0xC0U) == 0x80U) ++end;
+        ++count;
+    }
+    return text.substr(0, end);
+}
+
 }  // namespace el_sistema

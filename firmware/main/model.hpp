@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -77,5 +78,10 @@ MissionStatus status_from_string(const char* value);
 
 Mission* find_mission(AppState& state, MissionId id);
 const Mission* find_mission(const AppState& state, MissionId id);
+
+// Cuenta puntos de codigo UTF-8, no bytes. Los limites visibles de las
+// misiones se expresan en caracteres y deben tratar á/ñ como uno solo.
+size_t utf8_codepoint_count(const std::string& text);
+std::string utf8_truncate(const std::string& text, size_t max_codepoints);
 
 }  // namespace el_sistema

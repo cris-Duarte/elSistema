@@ -6,6 +6,7 @@
 #include <sys/time.h>
 
 #include "bmi270_api.h"
+#include "bsp/m5stack_tab5.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -164,6 +165,17 @@ std::string ClockService::format_local(int64_t utc, int utc_offset_minutes, bool
     return output;
 }
 
+std::string ClockService::format_status(int64_t utc, int utc_offset_minutes) const
+{
+    if (utc <= 0) return "--:--";
+    time_t local_epoch = static_cast<time_t>(utc + utc_offset_minutes * 60);
+    std::tm value {};
+    gmtime_r(&local_epoch, &value);
+    char output[24];
+    std::strftime(output, sizeof(output), "%H:%M %d/%m/%Y", &value);
+    return output;
+}
+
 bool OrientationService::init(i2c_master_bus_handle_t bus)
 {
     bmi270_handle_t sensor = nullptr;
@@ -236,6 +248,71 @@ int OrientationService::poll()
     // del sensor en el Tab5 si alguna postura quedara del reves.
     ESP_LOGI(TAG, "Rotación automática: %d (acc x=%d y=%d)", current_rotation_, x, y);
     return current_rotation_;
+}
+
+namespace {
+
+// Monitor de energía INA226: vive en el mismo bus I2C que el RTC y el
+// sensor de orientación. Solo se usa el registro de voltaje de bus (0x02),
+// que no necesita calibración: bits 15..3 con LSB de 1,25 mV. El bus es la
+// batería tal cual (fórmula de M5Unified: por celda 3300–4100 mV).
+constexpr uint8_t kPowerMonitorAddress = 0x41;
+constexpr uint8_t kPowerConfigRegister = 0x00;
+constexpr uint8_t kPowerBusVoltageRegister = 0x02;
+// Promedio de 16 muestras, conversión de 1100 µs en ambos canales y medida
+// continua de shunt+bus, como configura M5Unified para el Tab5.
+constexpr uint8_t kPowerConfigMsb = 0x53;
+constexpr uint8_t kPowerConfigLsb = 0x27;
+// Por debajo de esto no hay batería instalada (el pin flota); el equipo solo
+// puede estar corriendo por USB.
+constexpr int kBatteryPresentMv = 5000;
+
+}  // namespace
+
+bool PowerService::init(i2c_master_bus_handle_t bus)
+{
+    i2c_device_config_t config = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = kPowerMonitorAddress,
+        .scl_speed_hz = 400000,
+    };
+    if (i2c_master_bus_add_device(bus, &config, &monitor_) != ESP_OK) {
+        ESP_LOGW(TAG, "Monitor de energía INA226 no disponible");
+        monitor_ = nullptr;
+        return false;
+    }
+    const uint8_t setup[3] = {kPowerConfigRegister, kPowerConfigMsb, kPowerConfigLsb};
+    if (i2c_master_transmit(monitor_, setup, sizeof(setup), kI2cTimeoutMs) != ESP_OK) {
+        ESP_LOGW(TAG, "INA226 no aceptó la configuración; se usa la de arranque");
+    }
+    ESP_LOGI(TAG, "Monitor de energía listo (INA226)");
+    return true;
+}
+
+PowerStatus PowerService::poll()
+{
+    PowerStatus status;
+    // El BSP lo llama "usb_c_detect", pero el bit 6 de E2 es CHG_STAT del
+    // IP2326: alto mientras carga, bajo con batería llena o descargando.
+    status.charging = bsp_usb_c_detect();
+    if (monitor_ == nullptr) return status;
+    const uint8_t reg = kPowerBusVoltageRegister;
+    uint8_t data[2] = {};
+    if (i2c_master_transmit_receive(monitor_, &reg, 1, data, sizeof(data), kI2cTimeoutMs) != ESP_OK) {
+        return status;
+    }
+    const uint16_t raw = static_cast<uint16_t>((data[0] << 8) | data[1]);
+    const int pack_mv = static_cast<int>((raw >> 3) * 5 / 4);
+    if (pack_mv < kBatteryPresentMv) return status;
+    status.battery_mv = pack_mv;
+    status.battery_pct = std::clamp((pack_mv / 2 - 3300) * 100 / (4150 - 3350), 0, 100);
+    static bool logged_once = false;
+    if (!logged_once) {
+        logged_once = true;
+        ESP_LOGI(TAG, "Batería: %d mV -> %d%% (%s)", status.battery_mv, status.battery_pct,
+                 status.charging ? "cargando" : "sin cargar");
+    }
+    return status;
 }
 
 namespace {

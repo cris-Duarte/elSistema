@@ -139,7 +139,8 @@ bool ApplicationService::persist_or_restore(const AppState& previous)
 MissionId ApplicationService::create_mission(const std::string& title, const std::string& description, MissionRank rank,
                                              bool reminder_enabled, uint16_t reminder_minutes)
 {
-    if (title.empty() || repository_.storage_percent() >= 95) return 0;
+    if (title.empty() || utf8_codepoint_count(title) > 80 || utf8_codepoint_count(description) > 240 ||
+        repository_.storage_percent() >= 95) return 0;
     const AppState previous = state_;
     Mission mission;
     mission.id = state_.next_mission_id++;
@@ -159,7 +160,8 @@ bool ApplicationService::update_mission(MissionId id, const std::string& title, 
                                         MissionRank rank, bool reminder_enabled, uint16_t reminder_minutes)
 {
     Mission* mission = find_mission(state_, id);
-    if (mission == nullptr || mission->status == MissionStatus::Completed || title.empty()) return false;
+    if (mission == nullptr || mission->status == MissionStatus::Completed || title.empty() ||
+        utf8_codepoint_count(title) > 80 || utf8_codepoint_count(description) > 240) return false;
     const AppState previous = state_;
     if (mission->status == MissionStatus::FocusActive) commit_interval(*mission, true);
     mission = find_mission(state_, id);

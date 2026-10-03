@@ -1,6 +1,9 @@
 #pragma once
 
 #include "hardware.hpp"
+#include "assistant.hpp"
+#include "assistant_voice.hpp"
+#include "dictation.hpp"
 #include "model.hpp"
 #include "repository.hpp"
 #include "services.hpp"
@@ -18,12 +21,14 @@ namespace el_sistema {
 class AppUi {
 public:
     AppUi(AppState& state, ApplicationService& service, MissionRepository& repository, ClockService& clock,
-          OrientationService& orientation, ButtonService& button);
+          OrientationService& orientation, ButtonService& button, DictationService& dictation,
+          PowerService& power, AssistantService& assistant, AssistantVoiceService& assistant_voice);
     void start(lv_display_t* display);
 
 private:
-    enum class View { Dashboard, History, Editor, ClockSetup, SearchEditor };
-    enum class Overlay { None, Tutorial, Reward, Reminder, ConfirmDelete, MissionDetail, Info };
+    enum class View { Dashboard, Assistant, History, Editor, ClockSetup, SearchEditor, DictationSetup };
+    enum class Overlay { None, Tutorial, Reward, Reminder, ConfirmDelete, ConfirmForgetNetwork, MissionDetail, Info,
+                         Dictation, ConfirmDictationReplace };
     enum class ActionCode {
         NewMission,
         EditMission,
@@ -55,7 +60,30 @@ private:
         ClockOffsetMinus,
         ClockOffsetPlus,
         FinishTutorial,
-        DictationInfo,
+        OpenDictation,
+        DictationStop,
+        DictationCancel,
+        DictationRetry,
+        DictationAccept,
+        ConfirmDictationReplace,
+        OpenConnectivity,
+        ConnectivityTab,
+        ScanNetworks,
+        OpenHiddenNetwork,
+        CancelNetworkEditor,
+        ConnectAndSaveNetwork,
+        ConnectKnownNetwork,
+        ForgetNetwork,
+        ConfirmForgetNetwork,
+        MoveNetworkPriority,
+        ReconnectNetworks,
+        RefreshServers,
+        SelectServer,
+        TestWhisperServer,
+        SelectNetwork,
+        FocusNetworkField,
+        CloseConnectivity,
+        PlayLastCapture,
         KeyboardKey,
         SelectRank,
         ReminderMinus,
@@ -66,6 +94,16 @@ private:
         RefreshClockDays,
         WakeScreen,
         PowerOffDevice,
+        ToggleSidePanel,
+        OpenAssistant,
+        CloseAssistant,
+        AssistantTap,
+        AssistantDemo,
+        AssistantCelebrate,
+        AssistantVoiceStart,
+        AssistantVoiceStop,
+        AssistantVoiceCancel,
+        AssistantVoiceRetry,
     };
 
     struct Action {
@@ -85,19 +123,23 @@ private:
 
     void render();
     void render_dashboard();
+    void render_assistant();
     void render_landscape_dashboard();
     void render_portrait_dashboard();
     void render_history();
     void render_editor(bool search_only = false);
     void render_clock_setup();
+    void render_dictation_setup();
     void render_overlay();
     void render_screen_off();
 
     void render_header(bool compact = false);
+    void render_statusbar();
     void render_active_panel(lv_obj_t* parent, int width, int height);
     void render_focus_list(lv_obj_t* parent, int width, int height);
     void render_backlog_list(lv_obj_t* parent, int width, int height);
     void render_mission_row(lv_obj_t* parent, const Mission& mission, bool focus, int width);
+    void refresh_assistant_visual();
 
     lv_obj_t* panel(lv_obj_t* parent, int x, int y, int width, int height, bool scrollable = false);
     lv_obj_t* label(lv_obj_t* parent, const char* text, const lv_font_t* font, uint32_t color);
@@ -112,6 +154,8 @@ private:
 
     void open_editor(MissionId id);
     void capture_editor();
+    void capture_network_credentials();
+    void apply_dictation_candidate();
     void seed_clock_defaults();
     void capture_clock();
     void update_clock_days();
@@ -124,6 +168,12 @@ private:
     std::string duration_text(uint32_t seconds) const;
     std::string reminder_text(const Mission& mission) const;
     std::string truncate(const std::string& text, size_t max_chars) const;
+    // Textos de la barra superior. Se recalculan en cada tick y solo tocan los
+    // widgets cuando cambian, para no reconstruir la pantalla cada segundo.
+    std::string status_clock_text() const;
+    std::string status_net_text() const;
+    std::string status_power_text();
+    void refresh_statusbar();
 
     AppState& state_;
     ApplicationService& service_;
@@ -131,10 +181,17 @@ private:
     ClockService& clock_;
     OrientationService& orientation_;
     ButtonService& button_;
+    DictationService& dictation_;
+    PowerService& power_;
+    AssistantService& assistant_;
+    AssistantVoiceService& assistant_voice_;
     lv_display_t* display_ = nullptr;
     lv_obj_t* screen_ = nullptr;
     lv_obj_t* timer_label_ = nullptr;
     lv_obj_t* active_status_label_ = nullptr;
+    lv_obj_t* status_clock_label_ = nullptr;
+    lv_obj_t* status_net_label_ = nullptr;
+    lv_obj_t* status_power_label_ = nullptr;
     lv_obj_t* title_textarea_ = nullptr;
     lv_obj_t* description_textarea_ = nullptr;
     lv_obj_t* keyboard_ = nullptr;
@@ -145,7 +202,25 @@ private:
     lv_obj_t* clock_minute_roller_ = nullptr;
     lv_obj_t* reminder_value_label_ = nullptr;
     lv_obj_t* active_textarea_ = nullptr;
+    lv_obj_t* ssid_textarea_ = nullptr;
+    lv_obj_t* password_textarea_ = nullptr;
+    lv_obj_t* dictation_status_label_ = nullptr;
+    lv_obj_t* dictation_time_label_ = nullptr;
+    lv_obj_t* dictation_level_bar_ = nullptr;
+    lv_obj_t* assistant_character_ = nullptr;
+    lv_obj_t* assistant_aura_ = nullptr;
+    lv_obj_t* assistant_eye_left_ = nullptr;
+    lv_obj_t* assistant_eye_right_ = nullptr;
+    lv_obj_t* assistant_mouth_ = nullptr;
+    lv_obj_t* assistant_core_ = nullptr;
+    lv_obj_t* assistant_state_label_ = nullptr;
+    lv_obj_t* assistant_message_label_ = nullptr;
+    lv_obj_t* assistant_level_bar_ = nullptr;
     lv_timer_t* tick_timer_ = nullptr;
+    // Varias acciones pueden solicitar un redibujado antes de que LVGL ejecute
+    // la llamada asincrona. Mantener una sola pendiente evita reconstruir la
+    // jerarquia dos veces y liberar objetos que aun estan siendo dibujados.
+    bool render_pending_ = false;
 
     View view_ = View::Dashboard;
     Overlay overlay_ = Overlay::None;
@@ -170,7 +245,32 @@ private:
     int rank_filter_ = -1;
     int date_filter_days_ = 0;
     bool newest_first_ = true;
+    bool dictation_from_editor_ = false;
+    View connectivity_return_view_ = View::Dashboard;
+    std::string dictation_candidate_;
+    NetworkCredentials network_editor_;
+    bool network_editor_open_ = false;
+    bool network_editor_secured_ = true;
+    bool network_connect_pending_ = false;
+    int pending_forget_network_ = -1;
+    int connectivity_tab_ = 0;
+    uint32_t last_connectivity_generation_ = 0;
+    uint32_t last_ble_generation_ = 0;
+    uint32_t last_assistant_generation_ = 0;
+    uint32_t last_assistant_voice_generation_ = 0;
+    uint32_t assistant_animation_tick_ = 0;
+    int assistant_character_base_y_ = 0;
+    DictationPhase last_dictation_phase_ = DictationPhase::Unconfigured;
+    std::string last_dictation_message_;
+    // La red y la energía se sondean cada pocos segundos; el reloj, cada tick.
+    // Se guarda el último texto para no tocar los widgets sin cambios.
+    std::string last_status_clock_;
+    std::string last_status_net_;
+    std::string last_status_power_;
+    int64_t last_status_second_ = -1;
     int portrait_tab_ = 0;
+    // Panel lateral del dashboard horizontal: -1 colapsado, 0 enfoque, 1 backlog.
+    int side_panel_ = -1;
     int current_rotation_ = 1;
     int last_checkpoint_second_ = -1;
     std::string overlay_title_;

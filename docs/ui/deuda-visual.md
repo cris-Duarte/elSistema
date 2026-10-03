@@ -4,7 +4,7 @@ Registro visible de incumplimientos de [`lineamientos.md`](lineamientos.md)
 detectados en el código existente. Una entrada se cierra solo cuando el elemento
 cumple el lineamiento **por completo**; no se deja UI "a medio migrar".
 
-Última auditoría: **iteración 1 — identidad (color y tipografía)**.
+Última auditoría: **iteración 2 — sistema tipográfico**.
 
 ---
 
@@ -26,6 +26,23 @@ incumplimientos triviales que aparecieron en la auditoría.
 
 Verificación de la iteración: compila sin advertencias propias y arranca en el
 Tab5 sin *panic*. **Pendiente de confirmación visual del usuario.**
+
+---
+
+## Cerrado en la iteración 2 — sistema tipográfico
+
+Montserrat cubría con una sola voz los dos papeles que el §4 separa: fuente
+geométrica/futurista para los elementos del Sistema y fuente legible para el texto
+corrido. Se introdujeron Rajdhani SemiBold y Poppins Regular con procedencia
+verificable.
+
+| # | Incumplía | Lineamiento | Cómo quedó |
+|---|---|---|---|
+| 9 | Una sola familia para chrome y contenido: no se distinguía «el Sistema habla» de «el usuario escribió» | §4 Tipografía y §3 «consistencia total» | Rajdhani para títulos, rótulos, cifras, teclas, rango y nombres de misión; Poppins para descripciones, notas y campos. Regla y procedencia en `fonts/README.md` |
+| 10 | Assets de fuente sin uso (`font_es_14`) y cuatro fuentes Montserrat que la nueva escala dejaba obsoletas | §2 «no dejar UI a medio migrar» | Se eliminaron `font_es_14/16/20/28`; el build usa `font_poppins_16`, `font_rajdhani_20/28/40`, generadas por `tools/fonts/generar_fuentes.sh` con SHA256 fijado |
+| 11 | Las filas de las ruedas del reloj quedaban en 46 px al cambiar de fuente (Rajdhani 28 tiene 30 px de línea frente a 35 de Montserrat) | §4 y §9 «táctil ≥ 48 px» | Espaciado de línea a 20 → paso de 50 px, y comprobado antes de flashear |
+
+Efecto en el binario: 959 KB → **945 KB**, pese a añadir una familia nueva.
 
 ---
 
@@ -76,14 +93,24 @@ Tab5 sin *panic*. **Pendiente de confirmación visual del usuario.**
 
 ### Prioridad baja
 
-10. `font_es_14.c` sigue en `CMakeLists.txt` sin uso (el enlazador la descarta,
-    pero es un asset muerto en el repositorio).
+10. ~~`font_es_14.c` sin uso~~ — **cerrado en la iteración 2**: se eliminaron las
+    cuatro fuentes Montserrat junto con su entrada en `CMakeLists.txt`.
 
 11. `CONFIG_LV_USE_KEYBOARD` ya no se usa: el teclado es propio con
-    `lv_buttonmatrix`.
+    `lv_buttonmatrix`. Queda como bandera de configuración sobrante.
 
 12. Esquinas cortadas tipo HUD para nivel y rango (§4): no implementadas; son
     opcionales, no un requisito.
 
 13. Scanlines de fondo (§4): no implementados; el lineamiento los admite solo como
     micro‑detalle estático.
+
+14. **Recortes de texto conservadores (nueva, iteración 2).** `truncate()` corta los
+    títulos de misión a 32 caracteres en horizontal y 50 en vertical. Rajdhani es
+    más estrecha que la Montserrat anterior, así que ahora caben más: se puede
+    subir el límite para mostrar títulos completos.
+
+15. **Textos de cuerpo más anchos (nueva, iteración 2).** Poppins 16 ocupa más
+    ancho que Montserrat 16 al mismo tamaño, de modo que los textos largos (nota
+    del reloj, descripciones, cuerpo del tutorial) pueden pasar a una línea más.
+    Requiere la revisión visual del usuario.
