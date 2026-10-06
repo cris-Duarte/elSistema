@@ -1,6 +1,9 @@
 #pragma once
 
 #include "hardware.hpp"
+#include "home_scene.hpp"
+#include "home_renderer.hpp"
+#include "modules.hpp"
 #include "assistant.hpp"
 #include "assistant_voice.hpp"
 #include "dictation.hpp"
@@ -10,6 +13,7 @@
 #include "theme.hpp"
 
 #include <memory>
+#include <array>
 #include <string>
 #include <utility>
 #include <vector>
@@ -26,9 +30,10 @@ public:
     void start(lv_display_t* display);
 
 private:
-    enum class View { Dashboard, Assistant, History, Editor, ClockSetup, SearchEditor, DictationSetup };
+    enum class View { Home, Dashboard, Assistant, History, Editor, ClockSetup, SearchEditor, DictationSetup };
     enum class Overlay { None, Tutorial, Reward, Reminder, ConfirmDelete, ConfirmForgetNetwork, MissionDetail, Info,
                          Dictation, ConfirmDictationReplace };
+    enum class KeyboardPage { Letters, Numbers, Symbols };
     enum class ActionCode {
         NewMission,
         EditMission,
@@ -97,6 +102,8 @@ private:
         ToggleSidePanel,
         OpenAssistant,
         CloseAssistant,
+        OpenModule,
+        GoHome,
         AssistantTap,
         AssistantDemo,
         AssistantCelebrate,
@@ -116,12 +123,17 @@ private:
 
     static void action_callback(lv_event_t* event);
     static void tick_callback(lv_timer_t* timer);
+    static void home_animation_callback(lv_timer_t* timer);
+    static void home_touch_callback(lv_event_t* event);
+    static void home_rotation_exec(void* ui, int32_t progress);
+    static void home_rotation_complete(lv_anim_t* animation);
     static void render_callback(void* user_data);
     void dispatch(const Action& action);
     void tick();
     void schedule_render();
 
     void render();
+    void render_home();
     void render_dashboard();
     void render_assistant();
     void render_landscape_dashboard();
@@ -140,6 +152,10 @@ private:
     void render_backlog_list(lv_obj_t* parent, int width, int height);
     void render_mission_row(lv_obj_t* parent, const Mission& mission, bool focus, int width);
     void refresh_assistant_visual();
+    void update_home_animation();
+    void start_home_rotation();
+    void cancel_home_rotation();
+    void open_module(ModuleId module);
 
     lv_obj_t* panel(lv_obj_t* parent, int x, int y, int width, int height, bool scrollable = false);
     lv_obj_t* label(lv_obj_t* parent, const char* text, const lv_font_t* font, uint32_t color);
@@ -148,6 +164,7 @@ private:
                      uint32_t background = theme::SurfaceAlt, uint32_t border = theme::Border);
     lv_obj_t* clock_roller(int x, int y, int width, const std::string& options, int selected);
     lv_obj_t* spanish_keyboard(int x, int y, int width, int height);
+    void update_keyboard_map();
     void handle_key(const char* text);
     void set_active_textarea(lv_obj_t* target);
     Action* make_action(ActionCode code, MissionId id = 0, int value = 0, const char* text = nullptr);
@@ -216,13 +233,23 @@ private:
     lv_obj_t* assistant_state_label_ = nullptr;
     lv_obj_t* assistant_message_label_ = nullptr;
     lv_obj_t* assistant_level_bar_ = nullptr;
+    lv_obj_t* home_time_label_ = nullptr;
+    lv_obj_t* home_date_label_ = nullptr;
+    lv_obj_t* home_sandbox_ = nullptr;
+    lv_obj_t* home_header_group_ = nullptr;
+    lv_obj_t* home_modules_group_ = nullptr;
+    std::unique_ptr<HomeRenderer> home_renderer_;
+    int64_t home_last_frame_us_ = 0;
+    int64_t home_fps_since_us_ = 0;
+    uint32_t home_frame_count_ = 0;
     lv_timer_t* tick_timer_ = nullptr;
+    lv_timer_t* home_animation_timer_ = nullptr;
     // Varias acciones pueden solicitar un redibujado antes de que LVGL ejecute
     // la llamada asincrona. Mantener una sola pendiente evita reconstruir la
     // jerarquia dos veces y liberar objetos que aun estan siendo dibujados.
     bool render_pending_ = false;
 
-    View view_ = View::Dashboard;
+    View view_ = View::Home;
     Overlay overlay_ = Overlay::None;
     bool screen_off_ = false;
     MissionId editing_id_ = 0;
@@ -232,6 +259,7 @@ private:
     bool editor_reminder_enabled_ = true;
     uint16_t editor_reminder_minutes_ = 5;
     bool keyboard_upper_ = false;
+    KeyboardPage keyboard_page_ = KeyboardPage::Letters;
     int clock_day_ = 1;
     int clock_month_ = 1;
     int clock_year_ = 2024;
@@ -259,6 +287,22 @@ private:
     uint32_t last_assistant_generation_ = 0;
     uint32_t last_assistant_voice_generation_ = 0;
     uint32_t assistant_animation_tick_ = 0;
+    HomeScene home_scene_;
+    bool home_scene_initialized_ = false;
+    int home_scene_rotation_ = -1;
+    bool home_motion_enabled_ = false;
+    struct RotatingWidget {
+        lv_obj_t* object = nullptr;
+        int start_x = 0, start_y = 0;
+        int end_x = 0, end_y = 0;
+    };
+    std::vector<ScreenPoint> home_rotation_sources_;
+    std::vector<RotatingWidget> home_rotating_widgets_;
+    int home_rotation_turns_ = 0;
+    bool home_rotation_pending_ = false;
+    bool home_rotation_active_ = false;
+    bool home_rotation_supported_ = false;
+    int last_rotation_lock_ = -1;
     int assistant_character_base_y_ = 0;
     DictationPhase last_dictation_phase_ = DictationPhase::Unconfigured;
     std::string last_dictation_message_;

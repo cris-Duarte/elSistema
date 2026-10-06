@@ -1,4 +1,5 @@
 #include "hardware.hpp"
+#include "m5_platform.hpp"
 #include "assistant.hpp"
 #include "assistant_voice.hpp"
 #include "audio.hpp"
@@ -129,17 +130,21 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "Pruebas de dominio finalizadas");
 #endif
 
-    ESP_ERROR_CHECK(bsp_i2c_init());
-    bsp_io_expander_pi4ioe_init(bsp_i2c_get_handle());
-    bsp_reset_tp();
-
     if (!repository.init()) {
         ESP_LOGE(TAG, "No se pudo preparar el almacenamiento: %s", repository.last_error());
     }
     const bool restored = repository.load(state);
 
+    const bool m5_ready = el_sistema::init_m5_platform();
+    if (!m5_ready) {
+        ESP_LOGW(TAG, "M5Unified no disponible; usando BSP sin movimiento");
+        ESP_ERROR_CHECK(bsp_i2c_init());
+    }
+    bsp_io_expander_pi4ioe_init(bsp_i2c_get_handle());
+    bsp_reset_tp();
+
     clock_service.init(bsp_i2c_get_handle());
-    orientation_service.init(bsp_i2c_get_handle());
+    if (m5_ready) orientation_service.init(bsp_i2c_get_handle());
     button_service.init(bsp_i2c_get_handle());
     power_service.init(bsp_i2c_get_handle());
     application = std::make_unique<el_sistema::ApplicationService>(state, repository, clock_service);

@@ -5,7 +5,8 @@
 #include <cstdlib>
 #include <sys/time.h>
 
-#include "bmi270_api.h"
+#include "M5Unified.h"
+#include "m5_platform.hpp"
 #include "bsp/m5stack_tab5.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
@@ -178,83 +179,139 @@ std::string ClockService::format_status(int64_t utc, int utc_offset_minutes) con
 
 bool OrientationService::init(i2c_master_bus_handle_t bus)
 {
-    bmi270_handle_t sensor = nullptr;
-    const esp_err_t err = bmi270_sensor_create_from_master_bus_with_address(
-        bus, BMI270_I2C_ADDRESS, &sensor, bmi270_config_file,
-        BMI2_GYRO_CROSS_SENS_ENABLE | BMI2_CRT_RTOSK_ENABLE);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "BMI270 no disponible: %s", esp_err_to_name(err));
+    (void)bus;  // M5Unified owns the IMU on the protected shared BSP bus.
+    HardwareI2cGuard guard;
+    if (!M5.Imu.isEnabled() || M5.Imu.getType() != m5::imu_t::imu_bmi270) {
+        ESP_LOGW(TAG, "BMI270 no disponible en M5Unified");
         return false;
     }
-    const uint8_t sensors[] = {BMI2_ACCEL};
-    struct bmi2_sens_config config = {.type = BMI2_ACCEL};
-    if (bmi2_set_adv_power_save(BMI2_DISABLE, sensor) != BMI2_OK ||
-        bmi2_get_sensor_config(&config, 1, sensor) != BMI2_OK) {
-        bmi270_sensor_del(&sensor);
+    // BMI270: 100 Hz, ±8 g / ±2000 dps, normal filtering. Match M5Unified's
+    // conversion factors and leave enough headroom for the 2.5 g shake gesture.
+    constexpr uint8_t address = 0x68;
+    constexpr uint32_t frequency = 400000;
+    if (!M5.In_I2C.writeRegister8(address, 0x40, 0xA8, frequency) ||
+        !M5.In_I2C.writeRegister8(address, 0x41, 0x02, frequency) ||
+        !M5.In_I2C.writeRegister8(address, 0x42, 0xA8, frequency) ||
+        !M5.In_I2C.writeRegister8(address, 0x43, 0x00, frequency) ||
+        !M5.In_I2C.writeRegister8(address, 0x7D, 0x0C, frequency)) {
+        ESP_LOGW(TAG, "No se pudo configurar BMI270");
         return false;
     }
-    config.cfg.acc.odr = BMI2_ACC_ODR_25HZ;
-    config.cfg.acc.range = BMI2_ACC_RANGE_2G;
-    config.cfg.acc.bwp = BMI2_ACC_NORMAL_AVG4;
-    config.cfg.acc.filter_perf = BMI2_PERF_OPT_MODE;
-    if (bmi2_set_sensor_config(&config, 1, sensor) != BMI2_OK || bmi2_sensor_enable(sensors, 1, sensor) != BMI2_OK) {
-        bmi270_sensor_del(&sensor);
+    // M5.begin() may load offsets (or estimate them before the range is set).
+    // They must not be applied with a different raw scale: retain gravity and
+    // use uncalibrated ±8 g readings for this visual gesture, without erasing NVS.
+    M5.Imu.setCalibration(0, 0, 0);
+    M5.Imu.clearOffsetData();
+    sensor_ = &M5.Imu;
+    motion_queue_ = xQueueCreate(1, sizeof(MotionSample));
+    if (motion_queue_ == nullptr || xTaskCreate(task_entry, "orientation", 4096, this, 3, &task_) != pdPASS) {
+        if (motion_queue_ != nullptr) vQueueDelete(motion_queue_);
+        motion_queue_ = nullptr;
+        sensor_ = nullptr;
+        ESP_LOGW(TAG, "No se pudo crear la tarea de movimiento BMI270");
         return false;
     }
-    sensor_ = sensor;
-    ESP_LOGI(TAG, "Rotación automática lista");
+    ESP_LOGI(TAG, "BMI270 M5Unified listo: ±8 g, muestras 50 Hz, giroscopio solo en Inicio");
     return true;
 }
 
 int OrientationService::poll()
 {
-    if (sensor_ == nullptr) return -1;
-    struct bmi2_sens_data data {};
-    if (bmi2_get_sensor_data(&data, static_cast<bmi270_handle_t>(sensor_)) != BMI2_OK ||
-        !(data.status & BMI2_DRDY_ACC)) {
-        return -1;
+    return available() ? detected_rotation_.load(std::memory_order_relaxed) : -1;
+}
+
+MotionSample OrientationService::motion_snapshot() const
+{
+    MotionSample sample{};
+    if (motion_queue_ != nullptr) xQueuePeek(motion_queue_, &sample, 0);
+    return sample;
+}
+
+void OrientationService::task_entry(void* arg)
+{
+    static_cast<OrientationService*>(arg)->run();
+}
+
+void OrientationService::run()
+{
+    bool gyro_enabled = false;
+    bool motion_stale = false;
+    int64_t last_gyro_toggle_attempt_us = 0;
+    int64_t last_motion_sample_us = 0;
+    int64_t last_repair_us = 0;
+    OrientationDetector detector(current_rotation_.load());
+    TickType_t wake = xTaskGetTickCount();
+    while (true) {
+        const bool should_enable_gyro = home_motion_enabled_.load(std::memory_order_relaxed);
+        const int64_t loop_now_us = esp_timer_get_time();
+        const bool gyro_retry_due = last_gyro_toggle_attempt_us == 0 ||
+                                    loop_now_us - last_gyro_toggle_attempt_us >= 1000000;
+        if (should_enable_gyro != gyro_enabled && (!should_enable_gyro || gyro_retry_due)) {
+            last_gyro_toggle_attempt_us = loop_now_us;
+            HardwareI2cGuard guard;
+            const bool result = M5.In_I2C.writeRegister8(0x68, 0x7D, should_enable_gyro ? 0x0E : 0x0C, 400000);
+            gyro_enabled = result ? should_enable_gyro : gyro_enabled;
+            gyro_available_.store(gyro_enabled, std::memory_order_relaxed);
+            if (!result) ESP_LOGW(TAG, "No se pudo %s el giroscopio BMI270", should_enable_gyro ? "activar" : "desactivar");
+        }
+
+        MotionSample sample{};
+        bool read_ok;
+        {
+            HardwareI2cGuard guard;
+            const auto mask = M5.Imu.update();
+            read_ok = (mask & m5::IMU_Class::sensor_mask_accel) != 0;
+            if (read_ok) {
+                M5.Imu.getAccel(&sample.accel_x, &sample.accel_y, &sample.accel_z);
+                sample.gyro_available = gyro_enabled && (mask & m5::IMU_Class::sensor_mask_gyro);
+                if (sample.gyro_available) M5.Imu.getGyro(&sample.gyro_x, &sample.gyro_y, &sample.gyro_z);
+                sample.valid = true;
+            }
+        }
+        // M5's BMI270 driver gates reads on INT_STATUS_1. If that mapping is
+        // lost, restore it and the acquisition registers after a stale period.
+        // Do not reset the chip, touch, calibration storage or the shared bus.
+        if (!read_ok && loop_now_us - last_motion_sample_us >= 500000 &&
+            loop_now_us - last_repair_us >= 2000000) {
+            last_repair_us = loop_now_us;
+            HardwareI2cGuard guard;
+            const bool restored = M5.In_I2C.writeRegister8(0x68, 0x58, 0xFF, 400000) &&
+                                  M5.In_I2C.writeRegister8(0x68, 0x40, 0xA8, 400000) &&
+                                  M5.In_I2C.writeRegister8(0x68, 0x41, 0x02, 400000) &&
+                                  M5.In_I2C.writeRegister8(0x68, 0x7D, gyro_enabled ? 0x0E : 0x0C, 400000);
+            ESP_LOGW(TAG, "BMI270 sin muestras: recuperación %s", restored ? "solicitada" : "fallida");
+        }
+        if (read_ok) {
+            last_motion_sample_us = esp_timer_get_time();
+            motion_stale = false;
+            if (motion_queue_ != nullptr) xQueueOverwrite(motion_queue_, &sample);
+
+            const int previous = detected_rotation_.load(std::memory_order_relaxed);
+            const int detected = detector.update(sample, esp_timer_get_time());
+            if (detected != previous) {
+                detected_rotation_.store(detected, std::memory_order_relaxed);
+                ESP_LOGI(TAG, "Rotación detectada: %d (acc x=%.2f y=%.2f g)", detected, sample.accel_x, sample.accel_y);
+            }
+        } else if (!motion_stale && last_motion_sample_us != 0 &&
+                   esp_timer_get_time() - last_motion_sample_us >= 160000) {
+            // Si el acelerómetro deja de publicar muestras, no mantengas una
+            // inclinación vieja indefinidamente: la escena vuelve a gravedad
+            // vertical hasta recuperar lecturas válidas.
+            MotionSample unavailable{};
+            if (motion_queue_ != nullptr) xQueueOverwrite(motion_queue_, &unavailable);
+            detector.update(unavailable, esp_timer_get_time());
+            ESP_LOGW(TAG, "Muestras BMI270 caducadas; orientación conservada");
+            motion_stale = true;
+        }
+        vTaskDelayUntil(&wake, pdMS_TO_TICKS(home_motion_enabled_.load() ? HOME_FRAME_MS : 40));
     }
-    // El panel es nativo vertical (720x1280), asi que el eje Y del sensor recorre
-    // su lado largo y el X el corto. En vertical la gravedad cae sobre el lado
-    // largo (Y); en horizontal, sobre el corto (X). Tenerlo al reves hacia que la
-    // pantalla se pusiera horizontal al sostener el Tab5 en vertical.
-    constexpr int threshold = 7400;  // ~0.45 g at +/-2 g.
-    const int x = data.acc.x;
-    const int y = data.acc.y;
-    int candidate = -1;
-    if (std::abs(y) > std::abs(x) && std::abs(y) > threshold) {
-        candidate = y > 0 ? 0 : 2;
-    } else if (std::abs(x) > threshold) {
-        // Verificado en el Tab5: la pareja horizontal estaba 180 grados al reves
-        // (las dos posturas verticales ya eran correctas).
-        candidate = x < 0 ? 3 : 1;
-    }
-    if (candidate < 0 || candidate == current_rotation_) {
-        candidate_rotation_ = -1;
-        candidate_since_us_ = 0;
-        return -1;
-    }
-    const int64_t now = esp_timer_get_time();
-    if (candidate != candidate_rotation_) {
-        candidate_rotation_ = candidate;
-        candidate_since_us_ = now;
-        return -1;
-    }
-    if (now - candidate_since_us_ < 800000) return -1;
-    current_rotation_ = candidate;
-    candidate_rotation_ = -1;
-    candidate_since_us_ = 0;
-    // Registro con los valores crudos: sirve para verificar la orientacion real
-    // del sensor en el Tab5 si alguna postura quedara del reves.
-    ESP_LOGI(TAG, "Rotación automática: %d (acc x=%d y=%d)", current_rotation_, x, y);
-    return current_rotation_;
 }
 
 namespace {
 
 // Monitor de energía INA226: vive en el mismo bus I2C que el RTC y el
 // sensor de orientación. Solo se usa el registro de voltaje de bus (0x02),
-// que no necesita calibración: bits 15..3 con LSB de 1,25 mV. El bus es la
+// que no necesita calibración: bits 14..0 con LSB de 1,25 mV. El bus es la
 // batería tal cual (fórmula de M5Unified: por celda 3300–4100 mV).
 constexpr uint8_t kPowerMonitorAddress = 0x41;
 constexpr uint8_t kPowerConfigRegister = 0x00;
@@ -286,10 +343,35 @@ bool PowerService::init(i2c_master_bus_handle_t bus)
         ESP_LOGW(TAG, "INA226 no aceptó la configuración; se usa la de arranque");
     }
     ESP_LOGI(TAG, "Monitor de energía listo (INA226)");
+    status_queue_ = xQueueCreate(1, sizeof(PowerStatus));
+    if (status_queue_ == nullptr || xTaskCreate(task_entry, "power_monitor", 3072, this, 2, &task_) != pdPASS) {
+        if (status_queue_ != nullptr) vQueueDelete(status_queue_);
+        status_queue_ = nullptr;
+        ESP_LOGW(TAG, "No se pudo crear la tarea de energía");
+        return false;
+    }
     return true;
 }
 
-PowerStatus PowerService::poll()
+PowerStatus PowerService::poll() const
+{
+    PowerStatus status;
+    if (status_queue_ != nullptr) xQueuePeek(status_queue_, &status, 0);
+    return status;
+}
+
+void PowerService::task_entry(void* arg) { static_cast<PowerService*>(arg)->run(); }
+
+void PowerService::run()
+{
+    while (true) {
+        const PowerStatus status = read_status();
+        xQueueOverwrite(status_queue_, &status);
+        vTaskDelay(pdMS_TO_TICKS(5000));
+    }
+}
+
+PowerStatus PowerService::read_status()
 {
     PowerStatus status;
     // El BSP lo llama "usb_c_detect", pero el bit 6 de E2 es CHG_STAT del
@@ -302,10 +384,12 @@ PowerStatus PowerService::poll()
         return status;
     }
     const uint16_t raw = static_cast<uint16_t>((data[0] << 8) | data[1]);
-    const int pack_mv = static_cast<int>((raw >> 3) * 5 / 4);
-    if (pack_mv < kBatteryPresentMv) return status;
+    const int pack_mv = ina226_battery_mv(raw);
+    if (pack_mv < 0 || pack_mv > 9000) return status;
+    status.state = pack_mv < kBatteryPresentMv ? BatteryState::Missing : BatteryState::Available;
+    if (status.state == BatteryState::Missing) return status;
     status.battery_mv = pack_mv;
-    status.battery_pct = std::clamp((pack_mv / 2 - 3300) * 100 / (4150 - 3350), 0, 100);
+    status.battery_pct = battery_percent_from_mv(pack_mv);
     static bool logged_once = false;
     if (!logged_once) {
         logged_once = true;

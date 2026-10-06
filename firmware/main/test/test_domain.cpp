@@ -5,14 +5,57 @@
 #include "connectivity.hpp"
 #include "services.hpp"
 #include "transcription.hpp"
+#include "home_scene.hpp"
+#include "modules.hpp"
+#include "device_state.hpp"
+#include "light_particle.hpp"
 
 #include "unity.h"
 #include "esp_heap_caps.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
 using namespace el_sistema;
+
+TEST_CASE("INA226 conserva todos los bits y estima el porcentaje 2S", "[el_sistema][power]")
+{
+    TEST_ASSERT_EQUAL_INT(8000, ina226_battery_mv(6400));
+    TEST_ASSERT_EQUAL_INT(-1, ina226_battery_mv(0x8000));
+    TEST_ASSERT_EQUAL_INT(-1, battery_percent_from_mv(1000));
+    TEST_ASSERT_EQUAL_INT(50, battery_percent_from_mv(7400));
+    TEST_ASSERT_EQUAL_INT(87, battery_percent_from_mv(8000));
+    TEST_ASSERT_EQUAL_INT(100, battery_percent_from_mv(8400));
+}
+
+TEST_CASE("la orientación estable se conserva hasta desbloquear la UI", "[el_sistema][orientation]")
+{
+    OrientationDetector detector(1);
+    const MotionSample landscape{.accel_y=1, .valid=true};
+    TEST_ASSERT_EQUAL_INT(1, detector.update(landscape, 0));
+    TEST_ASSERT_EQUAL_INT(1, detector.update(landscape, 799999));
+    TEST_ASSERT_EQUAL_INT(0, detector.update(landscape, 800000));
+    TEST_ASSERT_EQUAL_INT(0, detector.update(landscape, 10000000));
+    const MotionSample inverted{.accel_x=-1, .valid=true};
+    TEST_ASSERT_EQUAL_INT(0, detector.update(inverted, 11000000));
+    TEST_ASSERT_EQUAL_INT(3, detector.update(inverted, 11800000));
+    TEST_ASSERT_EQUAL_INT(-1, shortest_rotation_turns(0, 3));
+    const ScreenPoint point = rotate_screen_point({120, 200}, 720, 1280, 1);
+    TEST_ASSERT_EQUAL_FLOAT(1080, point.x);
+    TEST_ASSERT_EQUAL_FLOAT(120, point.y);
+}
+
+TEST_CASE("las partículas emiten luz sin oscurecer halos vecinos", "[el_sistema][home]")
+{
+    LightSprite sprite;
+    sprite.build(9, theme::HomeParticleCyan);
+    TEST_ASSERT_EQUAL_UINT16(light_rgb565(theme::HomeLightCore), sprite.pixels[9 * 19 + 9]);
+    TEST_ASSERT_EQUAL_UINT16(0, sprite.pixels[0]);
+    TEST_ASSERT_EQUAL_UINT16(0x1234, add_light(0x1234, 0xFFFF, 0));
+    TEST_ASSERT_EQUAL_UINT16(0xFFFF, add_light(0xFFFF, 0xFFFF));
+    TEST_ASSERT_EQUAL_UINT16(0xF81F, add_light(0xF800, 0x001F));
+}
 
 TEST_CASE("el asistente recorre el ciclo visual sin IA", "[el_sistema][assistant]")
 {
@@ -107,6 +150,155 @@ TEST_CASE("el modelo localiza misiones por identificador estable", "[el_sistema]
     state.missions.push_back(Mission{.id = 7, .title = "Misión"});
     TEST_ASSERT_NOT_NULL(find_mission(state, 7));
     TEST_ASSERT_NULL(find_mission(state, 8));
+}
+
+TEST_CASE("el registro de módulos expone Productividad y Asistente", "[el_sistema][home]")
+{
+    TEST_ASSERT_EQUAL_UINT32(2, kModules.size());
+    TEST_ASSERT_NOT_NULL(find_module(ModuleId::Productivity));
+    TEST_ASSERT_NOT_NULL(find_module(ModuleId::Assistant));
+    TEST_ASSERT_NULL(find_module(static_cast<ModuleId>(99)));
+}
+
+TEST_CASE("la gravedad predeterminada acumula arena hacia abajo", "[el_sistema][home]")
+{
+    HomeScene scene;
+    scene.reset(320, 180);
+    float initial_y = 0;
+    for (const SandParticle& particle : scene.particles()) initial_y += particle.y;
+    for (int tick = 0; tick < 25; ++tick) scene.step(0.04f, MotionSample{}, 1);
+    float final_y = 0;
+    for (const SandParticle& particle : scene.particles()) final_y += particle.y;
+    TEST_ASSERT_TRUE(final_y > initial_y);
+}
+
+TEST_CASE("las partículas nacen arriba paulatinamente y con semilla aleatoria", "[el_sistema][home]")
+{
+    HomeScene scene, other;
+    scene.reset(1280, 720, 42);
+    other.reset(1280, 720, 7);
+    TEST_ASSERT_EQUAL_UINT32(0, scene.active_count());
+    scene.step(.02f, {}, 0);
+    other.step(.02f, {}, 0);
+    TEST_ASSERT_EQUAL_UINT32(1, scene.active_count());
+    TEST_ASSERT_TRUE(scene.particles()[0].y < scene.particles()[0].radius + 8);
+    TEST_ASSERT_TRUE(std::abs(scene.particles()[0].x - other.particles()[0].x) > 1);
+    for (int frame = 0; frame < 49; ++frame) scene.step(.02f, {}, 0);
+    TEST_ASSERT_TRUE(scene.active_count() >= 8 && scene.active_count() <= 18);
+    for (int frame = 0; frame < 950; ++frame) scene.step(.02f, {}, 0);
+    TEST_ASSERT_EQUAL_UINT32(MAX_PARTICLES, scene.active_count());
+    scene.resize(720, 1280, 1);
+    TEST_ASSERT_EQUAL_UINT32(MAX_PARTICLES, scene.active_count());
+    for (const Particle& p : scene.particles()) {
+        TEST_ASSERT_TRUE(p.x >= p.radius - .01f && p.x <= 720 - p.radius + .01f);
+        TEST_ASSERT_TRUE(p.y >= p.radius - .01f && p.y <= 1280 - p.radius + .01f);
+    }
+}
+
+TEST_CASE("la inclinación mueve arena y se transforma con la rotación", "[el_sistema][home]")
+{
+    HomeScene neutral;
+    HomeScene tilted;
+    HomeScene inverted;
+    neutral.reset(400, 240);
+    tilted.reset(400, 240);
+    inverted.reset(400, 240);
+    MotionSample motion{.accel_x = 0.61f, .accel_z = 0.79f, .valid = true};
+    for (int tick = 0; tick < 15; ++tick) {
+        neutral.step(0.04f, MotionSample{}, 0);
+        tilted.step(0.04f, motion, 0);
+        inverted.step(0.04f, motion, 2);
+    }
+    float neutral_x = 0, tilted_x = 0, inverted_x = 0;
+    for (size_t index = 0; index < HomeScene::kParticleCount; ++index) {
+        neutral_x += neutral.particles()[index].x;
+        tilted_x += tilted.particles()[index].x;
+        inverted_x += inverted.particles()[index].x;
+    }
+    TEST_ASSERT_TRUE(tilted_x > neutral_x);
+    TEST_ASSERT_TRUE(inverted_x < neutral_x);
+}
+
+TEST_CASE("las colisiones mantienen partículas dentro del área tras el reposo", "[el_sistema][home]")
+{
+    HomeScene scene;
+    scene.reset(280, 160);
+    MotionSample motion{.accel_x = -0.43f, .accel_y = 0.7f, .valid = true};
+    for (int tick = 0; tick < 500; ++tick) scene.step(0.04f, motion, 1);
+    for (const SandParticle& particle : scene.particles()) {
+        TEST_ASSERT_TRUE(particle.x >= particle.radius - 0.01f);
+        TEST_ASSERT_TRUE(particle.y >= particle.radius - 0.01f);
+        TEST_ASSERT_TRUE(particle.x <= 280 - particle.radius + 0.01f);
+        TEST_ASSERT_TRUE(particle.y <= 160 - particle.radius + 0.01f);
+    }
+}
+
+TEST_CASE("la pila de arena amortigua el movimiento cuando no hay inclinación", "[el_sistema][home]")
+{
+    HomeScene scene;
+    scene.reset(420, 280);
+    for (int tick = 0; tick < 600; ++tick) scene.step(0.04f, MotionSample{}, 0);
+    float maximum_speed = 0;
+    for (const SandParticle& particle : scene.particles()) {
+        maximum_speed = std::max(maximum_speed, std::abs(particle.vx) + std::abs(particle.vy));
+    }
+    TEST_ASSERT_TRUE(maximum_speed < 50.0f);
+}
+
+TEST_CASE("un toque perturba localmente las partículas", "[el_sistema][home]")
+{
+    HomeScene baseline;
+    HomeScene touched;
+    baseline.reset(320, 200);
+    touched.reset(320, 200);
+    baseline.step(0.02f, MotionSample{}, 0);
+    touched.step(0.02f, MotionSample{}, 0);
+    const SandParticle target = touched.particles()[0];
+    touched.perturb(target.x, target.y);
+    baseline.step(0.04f, MotionSample{}, 0);
+    touched.step(0.04f, MotionSample{}, 0);
+    const SandParticle& before = baseline.particles()[0];
+    const SandParticle& after = touched.particles()[0];
+    TEST_ASSERT_TRUE(std::abs(before.x - after.x) + std::abs(before.y - after.y) > 0.1f);
+}
+
+TEST_CASE("la gravedad respeta las cuatro orientaciones físicas", "[el_sistema][home]")
+{
+    const float vectors[4][2] = {{0, 1}, {1, 0}, {0, -1}, {-1, 0}};
+    for (int rotation = 0; rotation < 4; ++rotation) {
+        float x = vectors[rotation][0], y = vectors[rotation][1];
+        HomeScene::orient_vector(x, y, rotation);
+        TEST_ASSERT_FLOAT_WITHIN(0.001f, 0, x);
+        TEST_ASSERT_FLOAT_WITHIN(0.001f, 1, y);
+    }
+}
+
+TEST_CASE("sacudir desvanece y regenera sin repetir el gesto inmediatamente", "[el_sistema][home]")
+{
+    HomeScene scene;
+    scene.reset(1280, 720);
+    MotionSample shake{.accel_z = SHAKE_THRESHOLD + 0.2f, .valid = true};
+    scene.step(0.02f, shake, 1);
+    TEST_ASSERT_EQUAL_UINT32(1, scene.shake_count());
+    TEST_ASSERT_TRUE(scene.phase() == ParticlePhase::Disappearing);
+    bool saw_empty = false;
+    for (int frame = 0; frame < 70; ++frame) {
+        scene.step(0.02f, shake, 1);
+        saw_empty |= scene.visibility() == 0;
+    }
+    TEST_ASSERT_TRUE(saw_empty);
+    TEST_ASSERT_EQUAL_UINT32(1, scene.shake_count());
+    TEST_ASSERT_TRUE(scene.phase() == ParticlePhase::Visible);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 1, scene.visibility());
+}
+
+TEST_CASE("el número de partículas está acotado y cada una tiene color", "[el_sistema][home]")
+{
+    HomeScene scene(12), bounded(MAX_PARTICLES + 1);
+    scene.reset(720, 1280);
+    TEST_ASSERT_EQUAL_UINT32(12, scene.count());
+    TEST_ASSERT_EQUAL_UINT32(150, bounded.count());
+    for (size_t index = 0; index < scene.count(); ++index) TEST_ASSERT_NOT_EQUAL(0, scene.particles()[index].color);
 }
 
 TEST_CASE("los límites de texto cuentan caracteres UTF-8 y no bytes", "[el_sistema][utf8]")

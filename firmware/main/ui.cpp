@@ -4,12 +4,16 @@
 #include "fonts/fonts.h"
 
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
 
 #include "esp_log.h"
+#include "esp_heap_caps.h"
+#include "esp_random.h"
 #include "esp_timer.h"
 
 #include "bsp/m5stack_tab5.h"
@@ -18,6 +22,32 @@ namespace el_sistema {
 namespace {
 
 constexpr const char* TAG_UI = "ui";
+
+// Transformed LVGL objects need complete ARGB layers. The default 64 KiB
+// pool fits the static UI, but not even a rotated clock: LVGL otherwise
+// retries the impossible allocation forever inside its draw dispatcher.
+// Keep a dedicated lifetime pool in PSRAM, without changing BSP framebuffers.
+bool prepare_rotation_memory()
+{
+#if LV_USE_STDLIB_MALLOC == LV_STDLIB_BUILTIN
+    static bool attempted = false;
+    static lv_mem_pool_t pool = nullptr;
+    if (!attempted) {
+        attempted = true;
+        constexpr size_t bytes = 2 * 1024 * 1024;
+        void* memory = heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (memory != nullptr) {
+            pool = lv_mem_add_pool(memory, bytes);
+            if (pool == nullptr) heap_caps_free(memory);
+        }
+        if (pool != nullptr) ESP_LOGI(TAG_UI, "LVGL: reserva de 2 MiB en PSRAM para capas de rotación");
+        else ESP_LOGW(TAG_UI, "Sin memoria para giro animado; se conserva la rotación instantánea");
+    }
+    return pool != nullptr;
+#else
+    return false; // Reassess the allocator budget before enabling transforms.
+#endif
+}
 
 // Alias cortos de los tokens de identidad (main/theme.hpp). Tener un solo punto
 // de definicion deja el diff pequeno y evita colores literales dispersos.
@@ -42,6 +72,18 @@ const lv_font_t& FONT_LABEL = font_rajdhani_20;    // rotulos, botones, teclas
 const lv_font_t& FONT_DISPLAY = font_rajdhani_28;  // titulos, mision activa, ruedas
 const lv_font_t& FONT_NUMBER = font_rajdhani_40;   // titulo protagonista, nivel
 const lv_font_t& FONT_HERO = font_rajdhani_128;    // cronometro de la mision activa
+
+const lv_font_t& keyboard_font()
+{
+    // Conserva el tamaño Rajdhani de 40 px y añade los pictogramas de LVGL
+    // que esa fuente no contiene (mayúsculas, borrar y salto de línea).
+    static const lv_font_t font = [] {
+        lv_font_t result = font_rajdhani_40;
+        result.fallback = &lv_font_montserrat_32;
+        return result;
+    }();
+    return font;
+}
 
 lv_color_t color(uint32_t value) { return lv_color_hex(value); }
 
@@ -193,65 +235,43 @@ void build_time(std::tm& value)
     value.tm_min = minute;
 }
 
-// Teclado virtual en espanol: incluye ene, vocales acentuadas y los signos de
-// apertura, de modo que no hace falta una barra de acentos aparte. Las teclas de
-// control llevan texto en espanol porque las fuentes del proyecto no incluyen el
-// area de simbolos FontAwesome que usa el teclado estandar de LVGL.
+// Teclado táctil en español. Los números, signos, acentos y caracteres de
+// contraseña se separan en las páginas 123 y #+= para dejar más superficie a
+// las letras. Cada fila termina en "\n"; el mapa no depende de símbolos de icono.
 const char* const kKeyboardLower[] = {
-    "q",     "w", "e", "r", "t", "y", "u", "i", "o",       "p",     "\n",
-    "a",     "s", "d", "f", "g", "h", "j", "k", "l",       "ñ",     "\n",
-    "MAYÚS", "z", "x", "c", "v", "b", "n", "m", "BORRAR",           "\n",
-    "á",     "é", "í", "ó", "ú", "ü", "¿", "¡", "ESPACIO", "INTRO", "\n",
-    "0",     "1", "2", "3", "4", "5", "6", "7", "8",       "9",     "\n",
-    ".",     "-", "_", "@", "#", "$", "%", "&", "*",       "!",     ""
+    "q", "w", "e", "r", "t", "y", "u", "i", "o", "p", "\n",
+    "a", "s", "d", "f", "g", "h", "j", "k", "l", "ñ", "\n",
+    LV_SYMBOL_UP, "z", "x", "c", "v", "b", "n", "m", LV_SYMBOL_BACKSPACE, "\n",
+    "123", ",", "ESPACIO", ".", LV_SYMBOL_NEW_LINE, ""
 };
-
 const char* const kKeyboardUpper[] = {
-    "Q",     "W", "E", "R", "T", "Y", "U", "I", "O",       "P",     "\n",
-    "A",     "S", "D", "F", "G", "H", "J", "K", "L",       "Ñ",     "\n",
-    "MAYÚS", "Z", "X", "C", "V", "B", "N", "M", "BORRAR",           "\n",
-    "Á",     "É", "Í", "Ó", "Ú", "Ü", "¿", "¡", "ESPACIO", "INTRO", "\n",
-    "0",     "1", "2", "3", "4", "5", "6", "7", "8",       "9",     "\n",
-    ".",     "-", "_", "@", "#", "$", "%", "&", "*",       "!",     ""
+    "Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P", "\n",
+    "A", "S", "D", "F", "G", "H", "J", "K", "L", "Ñ", "\n",
+    LV_SYMBOL_UP, "Z", "X", "C", "V", "B", "N", "M", LV_SYMBOL_BACKSPACE, "\n",
+    "123", ",", "ESPACIO", ".", LV_SYMBOL_NEW_LINE, ""
+};
+const char* const kKeyboardNumbersLower[] = {
+    "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "\n",
+    "-", "_", ".", ",", ":", ";", "(", ")", "/", "@", "\n",
+    "á", "é", "í", "ó", "ú", "ü", "ñ", "¿", "¡", "?", "\n",
+    "ABC", "#+=", LV_SYMBOL_UP, "ESPACIO", LV_SYMBOL_BACKSPACE, LV_SYMBOL_NEW_LINE, ""
+};
+const char* const kKeyboardNumbersUpper[] = {
+    "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "\n",
+    "-", "_", ".", ",", ":", ";", "(", ")", "/", "@", "\n",
+    "Á", "É", "Í", "Ó", "Ú", "Ü", "Ñ", "¿", "¡", "?", "\n",
+    "ABC", "#+=", LV_SYMBOL_UP, "ESPACIO", LV_SYMBOL_BACKSPACE, LV_SYMBOL_NEW_LINE, ""
+};
+const char* const kKeyboardSymbols[] = {
+    "!", "\"", "#", "$", "%", "&", "'", "(", ")", "*", "\n",
+    "+", ",", "-", ".", "/", ":", ";", "<", "=", ">", "\n",
+    "?", "@", "[", "\\", "]", "^", "_", "`", "{", "|", "\n",
+    "}", "~", "123", "ABC", "ESPACIO", LV_SYMBOL_BACKSPACE, LV_SYMBOL_NEW_LINE, ""
 };
 
-// Ancho en unidades y banderas por tecla. Los dos mapas comparten estructura,
-// asi que sirve la misma tabla.
-constexpr lv_buttonmatrix_ctrl_t key_width(int width)
-{
-    return static_cast<lv_buttonmatrix_ctrl_t>(width | LV_BUTTONMATRIX_CTRL_CLICK_TRIG |
-                                               LV_BUTTONMATRIX_CTRL_NO_REPEAT);
-}
-
-// Una linea por fila, en el mismo orden que el mapa. La ultima fila permite
-// escribir contraseñas e IP sin depender de otro teclado.
-const lv_buttonmatrix_ctrl_t kKeyboardCtrl[] = {
-    // q w e r t y u i o p
-    key_width(5), key_width(5), key_width(5), key_width(5), key_width(5), key_width(5), key_width(5), key_width(5),
-    key_width(5), key_width(5),
-    // a s d f g h j k l ñ
-    key_width(5), key_width(5), key_width(5), key_width(5), key_width(5), key_width(5), key_width(5), key_width(5),
-    key_width(5), key_width(5),
-    // MAYÚS z x c v b n m BORRAR
-    key_width(7), key_width(5), key_width(5), key_width(5), key_width(5), key_width(5), key_width(5), key_width(5),
-    key_width(8),
-    // á é í ó ú ü ¿ ¡ ESPACIO INTRO
-    key_width(4), key_width(4), key_width(4), key_width(4), key_width(4), key_width(4), key_width(4), key_width(4),
-    key_width(10), key_width(8),
-    // 0 1 2 3 4 5 6 7 8 9
-    key_width(5), key_width(5), key_width(5), key_width(5), key_width(5), key_width(5), key_width(5), key_width(5),
-    key_width(5), key_width(5),
-    // . - _ @ # $ % & * !
-    key_width(5), key_width(5), key_width(5), key_width(5), key_width(5), key_width(5), key_width(5), key_width(5),
-    key_width(5), key_width(5)
-};
-
-constexpr uint32_t kShiftButton = 20;  // indice de "MAYÚS" dentro del mapa
-
-// Barra superior de estado: la parte visual sigue siendo fina, pero el estado
-// Wi-Fi tiene una zona táctil transparente de 44 px.
+// Barra superior de estado compacta con zonas táctiles de 48 px.
 // Se dibuja la última para que ningún panel ni diálogo la tape.
-constexpr int kStatusBarHeight = 22;
+constexpr int kStatusBarHeight = 48;
 
 }  // namespace
 
@@ -267,13 +287,14 @@ void AppUi::start(lv_display_t* display)
 {
     display_ = display;
     screen_ = lv_screen_active();
+    home_rotation_supported_ = prepare_rotation_memory();
     current_rotation_ = 1;
     orientation_.set_current(current_rotation_);
     if (!clock_.is_valid()) {
         seed_clock_defaults();
         view_ = View::ClockSetup;
-    } else if (!state_.settings.tutorial_completed) {
-        overlay_ = Overlay::Tutorial;
+    } else {
+        view_ = View::Home;
     }
     render();
     tick_timer_ = lv_timer_create(tick_callback, 250, this);
@@ -289,6 +310,22 @@ void AppUi::tick_callback(lv_timer_t* timer)
 {
     auto* ui = static_cast<AppUi*>(lv_timer_get_user_data(timer));
     if (ui != nullptr) ui->tick();
+}
+
+void AppUi::home_animation_callback(lv_timer_t* timer)
+{
+    auto* ui = static_cast<AppUi*>(lv_timer_get_user_data(timer));
+    if (ui != nullptr) ui->update_home_animation();
+}
+
+void AppUi::home_touch_callback(lv_event_t* event)
+{
+    auto* ui = static_cast<AppUi*>(lv_event_get_user_data(event));
+    lv_indev_t* input = lv_indev_active();
+    if (ui == nullptr || input == nullptr) return;
+    lv_point_t point{};
+    lv_indev_get_point(input, &point);
+    ui->home_scene_.perturb(static_cast<float>(point.x), static_cast<float>(point.y));
 }
 
 void AppUi::render_callback(void* user_data)
@@ -364,7 +401,25 @@ lv_obj_t* AppUi::panel(lv_obj_t* parent, int x, int y, int width, int height, bo
 void AppUi::render()
 {
     if (screen_ == nullptr) return;
+    const bool should_run_home_motion = view_ == View::Home && !screen_off_;
+    cancel_home_rotation(); // No animation may retain objects being deleted.
+    if (home_animation_timer_ != nullptr) {
+        lv_timer_delete(home_animation_timer_);
+        home_animation_timer_ = nullptr;
+    }
+    if (should_run_home_motion != home_motion_enabled_) {
+        home_motion_enabled_ = should_run_home_motion;
+        orientation_.set_home_motion_enabled(home_motion_enabled_);
+    }
+    home_sandbox_ = nullptr;
+    home_time_label_ = nullptr;
+    home_date_label_ = nullptr;
+    home_header_group_ = nullptr;
+    home_modules_group_ = nullptr;
     lv_obj_clean(screen_);
+    // Delete the image object before freeing either of its RAM canvases.
+    home_renderer_.reset();
+    lv_timer_set_period(lv_display_get_refr_timer(display_), should_run_home_motion ? HOME_FRAME_MS : 33);
     actions_.clear();
     reminder_labels_.clear();
     timer_label_ = nullptr;
@@ -397,18 +452,22 @@ void AppUi::render()
     assistant_message_label_ = nullptr;
     assistant_level_bar_ = nullptr;
 
-    lv_obj_set_style_bg_color(screen_, color(BG), LV_PART_MAIN);
+    const bool home = view_ == View::Home && !screen_off_;
+    lv_obj_set_style_bg_color(screen_, color(home ? theme::HomeBackground : BG), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(screen_, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_text_font(screen_, &FONT_BODY, LV_PART_MAIN);
 
     // Con la pantalla apagada solo se dibuja la capa que absorbe el tacto, para
     // que un roce no active botones invisibles. La vista se reconstruye al volver.
     if (screen_off_) {
+        home_rotation_pending_ = false;
+        home_rotation_sources_.clear();
         render_screen_off();
         return;
     }
 
     switch (view_) {
+        case View::Home: render_home(); break;
         case View::Dashboard: render_dashboard(); break;
         case View::Assistant: render_assistant(); break;
         case View::History: render_history(); break;
@@ -420,6 +479,79 @@ void AppUi::render()
     if (overlay_ != Overlay::None) render_overlay();
     // La barra va la última para que ningún panel ni diálogo la tape.
     render_statusbar();
+    if (home_rotation_pending_ && view_ == View::Home && overlay_ == Overlay::None && !screen_off_) {
+        start_home_rotation();
+    } else {
+        home_rotation_pending_ = false;
+        home_rotation_sources_.clear();
+    }
+}
+
+void AppUi::cancel_home_rotation()
+{
+    lv_anim_delete(this, home_rotation_exec);
+    home_rotation_active_ = false;
+    home_rotating_widgets_.clear();
+}
+
+void AppUi::home_rotation_exec(void* value, int32_t progress)
+{
+    auto* ui = static_cast<AppUi*>(value);
+    const int angle = ui->home_rotation_turns_ * 900 * (1024 - progress) / 1024;
+    for (const RotatingWidget& widget : ui->home_rotating_widgets_) {
+        lv_obj_set_pos(widget.object,
+                       widget.start_x + (widget.end_x - widget.start_x) * progress / 1024,
+                       widget.start_y + (widget.end_y - widget.start_y) * progress / 1024);
+        lv_obj_set_style_transform_rotation(widget.object, angle, LV_PART_MAIN);
+    }
+}
+
+void AppUi::home_rotation_complete(lv_anim_t* animation)
+{
+    auto* ui = static_cast<AppUi*>(animation->var);
+    home_rotation_exec(ui, 1024);
+    ui->home_rotating_widgets_.clear();
+    ui->home_rotation_active_ = false;
+}
+
+void AppUi::start_home_rotation()
+{
+    home_rotation_pending_ = false;
+    lv_mem_monitor_t memory{};
+    lv_mem_monitor(&memory);
+    if (!home_rotation_supported_ || memory.free_size < 1024 * 1024 || memory.free_biggest_size < 512 * 1024) {
+        home_rotation_sources_.clear();
+        ESP_LOGW(TAG_UI, "Giro sin animación por memoria LVGL insuficiente");
+        return;
+    }
+    lv_obj_update_layout(screen_);
+    size_t index = 0;
+    for (uint32_t i = 0; i < lv_obj_get_child_count(screen_); ++i) {
+        lv_obj_t* object = lv_obj_get_child(screen_, i);
+        if (object == home_sandbox_) continue;
+        if (index >= home_rotation_sources_.size()) break;
+        const ScreenPoint source = home_rotation_sources_[index++];
+        const int width = lv_obj_get_width(object), height = lv_obj_get_height(object);
+        home_rotating_widgets_.push_back({object,
+            static_cast<int>(std::lround(source.x)) - width / 2,
+            static_cast<int>(std::lround(source.y)) - height / 2,
+            lv_obj_get_x(object), lv_obj_get_y(object)});
+        lv_obj_set_style_transform_pivot_x(object, width / 2, LV_PART_MAIN);
+        lv_obj_set_style_transform_pivot_y(object, height / 2, LV_PART_MAIN);
+    }
+    home_rotation_sources_.clear();
+    if (home_rotating_widgets_.empty()) return;
+    home_rotation_active_ = true;
+    home_rotation_exec(this, 0); // Compensate the display turn before its first flush.
+    lv_anim_t animation;
+    lv_anim_init(&animation);
+    lv_anim_set_var(&animation, this);
+    lv_anim_set_values(&animation, 0, 1024);
+    lv_anim_set_duration(&animation, 320);
+    lv_anim_set_exec_cb(&animation, home_rotation_exec);
+    lv_anim_set_path_cb(&animation, lv_anim_path_ease_out);
+    lv_anim_set_completed_cb(&animation, home_rotation_complete);
+    lv_anim_start(&animation);
 }
 
 void AppUi::render_statusbar()
@@ -427,38 +559,217 @@ void AppUi::render_statusbar()
     const int width = lv_display_get_horizontal_resolution(display_);
     lv_obj_t* bar = lv_obj_create(screen_);
     place(bar, 0, 0, width, kStatusBarHeight);
-    lv_obj_set_style_bg_color(bar, color(PANEL), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_MAIN);
+    const bool home = view_ == View::Home && !screen_off_;
+    lv_obj_set_style_bg_color(bar, color(home ? theme::HomeSurface : PANEL), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(bar, home ? LV_OPA_TRANSP : LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_border_side(bar, LV_BORDER_SIDE_BOTTOM, LV_PART_MAIN);
-    lv_obj_set_style_border_color(bar, color(LINE), LV_PART_MAIN);
-    lv_obj_set_style_border_width(bar, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(bar, color(home ? theme::HomeInk : LINE), LV_PART_MAIN);
+    lv_obj_set_style_border_width(bar, home ? 0 : 1, LV_PART_MAIN);
     lv_obj_set_style_radius(bar, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(bar, 0, LV_PART_MAIN);
+    lv_obj_remove_flag(bar, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
 
     last_status_clock_ = status_clock_text();
     last_status_net_ = status_net_text();
     last_status_power_ = status_power_text();
     last_status_second_ = clock_.now_utc();
+    lv_obj_t* status_parent = home ? bar : screen_;
 
-    status_clock_label_ = label(screen_, last_status_clock_.c_str(), &FONT_BODY, TEXT);
-    lv_obj_set_pos(status_clock_label_, 20, 1);
-    status_net_label_ = label(screen_, last_status_net_.c_str(), &FONT_BODY,
-                              dictation_.wifi_connected() ? CYAN : MUTED);
+    if (!home) {
+        status_clock_label_ = label(screen_, last_status_clock_.c_str(), &FONT_BODY, TEXT);
+        lv_obj_set_pos(status_clock_label_, 20, (kStatusBarHeight - 24) / 2);
+    }
+    status_net_label_ = label(status_parent, last_status_net_.c_str(), &FONT_BODY,
+                              dictation_.wifi_connected() ? (home ? theme::HomeInk : CYAN)
+                                                         : (home ? theme::HomeMuted : MUTED));
     lv_obj_set_width(status_net_label_, 220);
     lv_obj_set_style_text_align(status_net_label_, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
-    lv_obj_set_pos(status_net_label_, width - 560, 1);
-    lv_obj_t* network_touch = lv_obj_create(screen_);
-    place(network_touch, width - 560, 0, 220, 44);
+    lv_obj_set_pos(status_net_label_, width - 560, (kStatusBarHeight - 24) / 2);
+    lv_obj_t* network_touch = lv_obj_create(status_parent);
+    place(network_touch, width - 560, 0, 220, kStatusBarHeight);
     lv_obj_set_style_bg_opa(network_touch, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(network_touch, 0, LV_PART_MAIN);
     lv_obj_set_style_radius(network_touch, 0, LV_PART_MAIN);
     lv_obj_remove_flag(network_touch, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(network_touch, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(network_touch, action_callback, LV_EVENT_CLICKED, make_action(ActionCode::OpenConnectivity));
-    status_power_label_ = label(screen_, last_status_power_.c_str(), &FONT_BODY, MUTED);
+    status_power_label_ = label(status_parent, last_status_power_.c_str(), &FONT_BODY,
+                                home ? theme::HomeMuted : MUTED);
     lv_obj_set_width(status_power_label_, 320);
     lv_obj_set_style_text_align(status_power_label_, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
-    lv_obj_set_pos(status_power_label_, width - 340, 1);
+    lv_obj_set_pos(status_power_label_, width - 340, (kStatusBarHeight - 24) / 2);
+    if (home) {
+        for (lv_obj_t* text : {status_net_label_, status_power_label_}) {
+            lv_obj_set_style_bg_color(text, color(theme::HomeBackground), LV_PART_MAIN);
+            lv_obj_set_style_bg_opa(text, LV_OPA_90, LV_PART_MAIN);
+        }
+    }
+}
+
+void AppUi::render_home()
+{
+    const int width = lv_display_get_horizontal_resolution(display_);
+    const int height = lv_display_get_vertical_resolution(display_);
+    const bool portrait = is_portrait();
+
+    if (!home_scene_initialized_) {
+        home_scene_.reset(static_cast<float>(width), static_cast<float>(height), esp_random());
+        home_scene_initialized_ = true;
+    } else if (home_scene_.width() != width || home_scene_.height() != height ||
+               home_scene_rotation_ != current_rotation_) {
+        home_scene_.resize(static_cast<float>(width), static_cast<float>(height),
+                           shortest_rotation_turns(home_scene_rotation_, current_rotation_));
+    }
+    home_scene_rotation_ = current_rotation_;
+
+    home_sandbox_ = lv_image_create(screen_);
+    place(home_sandbox_, 0, 0, width, height);
+    lv_obj_remove_flag(home_sandbox_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(home_sandbox_, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(home_sandbox_, home_touch_callback, LV_EVENT_CLICKED, this);
+    home_renderer_ = std::make_unique<HomeRenderer>();
+    if (!home_renderer_->init(home_sandbox_, width, height)) {
+        ESP_LOGW(TAG_UI, "Sin PSRAM para las partículas; Inicio sigue disponible");
+        home_renderer_.reset();
+        lv_obj_delete(home_sandbox_);
+        home_sandbox_ = nullptr;
+    } else {
+        home_renderer_->draw(home_scene_);
+    }
+
+    const auto group = [](lv_obj_t* parent, int x, int y, int group_width, int group_height) {
+        lv_obj_t* object = lv_obj_create(parent);
+        place(object, x, y, group_width, group_height);
+        lv_obj_set_style_bg_opa(object, LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_obj_set_style_border_width(object, 0, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(object, 0, LV_PART_MAIN);
+        lv_obj_set_style_radius(object, 0, LV_PART_MAIN);
+        lv_obj_set_style_shadow_width(object, 0, LV_PART_MAIN);
+        lv_obj_remove_flag(object, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_remove_flag(object, LV_OBJ_FLAG_SCROLLABLE);
+        return object;
+    };
+
+    const int header_width = portrait ? width - 48 : 260;
+    home_header_group_ = group(screen_, 24, kStatusBarHeight + 10, header_width, 76);
+    lv_obj_t* eyebrow = label(home_header_group_, "EL SISTEMA", &FONT_LABEL, theme::HomeMuted);
+    lv_obj_set_pos(eyebrow, 0, 0);
+    const std::string clock_text = status_clock_text();
+    const size_t separator = clock_text.find(' ');
+    const std::string time_text = separator == std::string::npos ? clock_text : clock_text.substr(0, separator);
+    const std::string date_text = separator == std::string::npos ? "" : clock_text.substr(separator + 1);
+    home_time_label_ = label(home_header_group_, time_text.c_str(), &FONT_NUMBER, theme::HomeInk);
+    lv_obj_set_pos(home_time_label_, 0, 22);
+    home_date_label_ = label(home_header_group_, date_text.c_str(), &FONT_LABEL, theme::HomeMuted);
+    lv_obj_set_pos(home_date_label_, 132, 36);
+    for (lv_obj_t* text : {eyebrow, home_time_label_, home_date_label_}) {
+        lv_obj_set_style_bg_color(text, color(theme::HomeBackground), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(text, LV_OPA_70, LV_PART_MAIN);
+        lv_obj_set_style_pad_hor(text, 4, LV_PART_MAIN);
+        lv_obj_remove_flag(text, LV_OBJ_FLAG_CLICKABLE);
+    }
+
+    constexpr int module_cell_width = 108;
+    constexpr int module_cell_height = 94;
+    const int module_group_width = module_cell_width * 2 + 12;
+    home_modules_group_ = group(screen_, portrait ? (width - module_group_width) / 2 : width - module_group_width - 30,
+                                portrait ? height - module_cell_height - 28 : height - module_cell_height - 24,
+                                module_group_width, module_cell_height);
+    for (size_t index = 0; index < kModules.size(); ++index) {
+        const ModuleDescriptor& module = kModules[index];
+        const int x = static_cast<int>(index) * (module_cell_width + 12);
+        const uint32_t accent = module.id == ModuleId::Productivity ? theme::HomeBlue : theme::HomeCanary;
+
+        lv_obj_t* cell = lv_button_create(home_modules_group_);
+        place(cell, x, 0, module_cell_width, module_cell_height);
+        lv_obj_set_style_bg_opa(cell, LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_obj_set_style_border_width(cell, 0, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(cell, 0, LV_PART_MAIN);
+        lv_obj_set_style_shadow_width(cell, 0, LV_PART_MAIN);
+        lv_obj_remove_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_event_cb(cell, action_callback, LV_EVENT_CLICKED,
+                           make_action(ActionCode::OpenModule, 0, static_cast<int>(module.id)));
+
+        constexpr int icon_size = 58;
+        lv_obj_t* icon = lv_obj_create(cell);
+        place(icon, (module_cell_width - icon_size) / 2, 0, icon_size, icon_size);
+        lv_obj_set_style_bg_color(icon, color(accent), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(icon, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_border_color(icon, color(theme::HomeIconInk), LV_PART_MAIN);
+        lv_obj_set_style_border_width(icon, 2, LV_PART_MAIN);
+        lv_obj_set_style_radius(icon, 8, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(icon, 0, LV_PART_MAIN);
+        lv_obj_set_style_shadow_color(icon, color(theme::HomeIconInk), LV_PART_MAIN);
+        lv_obj_set_style_shadow_opa(icon, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_shadow_width(icon, 0, LV_PART_MAIN);
+        lv_obj_set_style_shadow_spread(icon, 1, LV_PART_MAIN);
+        lv_obj_set_style_shadow_ofs_x(icon, 4, LV_PART_MAIN);
+        lv_obj_set_style_shadow_ofs_y(icon, 4, LV_PART_MAIN);
+        lv_obj_remove_flag(icon, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_remove_flag(icon, LV_OBJ_FLAG_SCROLLABLE);
+        const auto shape = [&](int sx, int sy, int sw, int sh, bool filled, int radius) {
+            lv_obj_t* object = lv_obj_create(icon);
+            place(object, sx, sy, sw, sh);
+            lv_obj_set_style_bg_color(object, color(theme::HomeIconInk), LV_PART_MAIN);
+            lv_obj_set_style_bg_opa(object, filled ? LV_OPA_COVER : LV_OPA_TRANSP, LV_PART_MAIN);
+            lv_obj_set_style_border_color(object, color(theme::HomeIconInk), LV_PART_MAIN);
+            lv_obj_set_style_border_width(object, filled ? 0 : 3, LV_PART_MAIN);
+            lv_obj_set_style_radius(object, radius, LV_PART_MAIN);
+            lv_obj_set_style_pad_all(object, 0, LV_PART_MAIN);
+            lv_obj_remove_flag(object, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_remove_flag(object, LV_OBJ_FLAG_SCROLLABLE);
+        };
+        if (module.id == ModuleId::Productivity) {
+            // A compact checklist glyph, no font/icon asset dependency.
+            shape(15, 11, 28, 38, false, 3);
+            for (int line = 0; line < 3; ++line) {
+                shape(20, 18 + line * 9, 4, 4, true, 1);
+                shape(28, 19 + line * 9, 9, 2, true, 0);
+            }
+        } else {
+            // Friendly robot face; no StackChan servo/character resources.
+            shape(12, 17, 34, 27, false, 7);
+            shape(20, 26, 4, 6, true, 2);
+            shape(34, 26, 4, 6, true, 2);
+            shape(23, 37, 12, 2, true, 1);
+            shape(28, 9, 2, 8, true, 0);
+            shape(25, 5, 8, 8, true, LV_RADIUS_CIRCLE);
+        }
+        lv_obj_t* name = label(cell, module.name, &FONT_LABEL, theme::HomeInk);
+        lv_obj_set_width(name, module_cell_width);
+        lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(name, color(theme::HomeBackground), LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(name, LV_OPA_90, LV_PART_MAIN);
+        lv_obj_set_pos(name, 0, icon_size + 8);
+        lv_obj_remove_flag(name, LV_OBJ_FLAG_CLICKABLE);
+    }
+
+    if (home_renderer_ != nullptr) {
+        home_last_frame_us_ = home_fps_since_us_ = esp_timer_get_time();
+        home_frame_count_ = 0;
+        home_animation_timer_ = lv_timer_create(home_animation_callback, HOME_FRAME_MS, this);
+    }
+}
+
+void AppUi::update_home_animation()
+{
+    if (view_ != View::Home || screen_off_ || home_renderer_ == nullptr) return;
+    const int64_t now = esp_timer_get_time();
+    const float dt = static_cast<float>(now - home_last_frame_us_) / 1000000.0f;
+    home_last_frame_us_ = now;
+    home_scene_.step(dt, orientation_.motion_snapshot(), current_rotation_);
+    home_renderer_->draw(home_scene_);
+    ++home_frame_count_;
+    if (now - home_fps_since_us_ >= 10000000) {
+        ESP_LOGI(TAG_UI, "Inicio: %.1f fotogramas/s, %u/%u partículas, sacudidas %lu",
+                 home_frame_count_ * 1000000.0 / (now - home_fps_since_us_),
+                 static_cast<unsigned>(home_scene_.active_count()),
+                 static_cast<unsigned>(home_scene_.count()),
+                 static_cast<unsigned long>(home_scene_.shake_count()));
+        home_fps_since_us_ = now;
+        home_frame_count_ = 0;
+    }
 }
 
 void AppUi::render_header(bool compact)
@@ -490,7 +801,7 @@ void AppUi::render_header(bool compact)
         lv_obj_set_pos(warning, width - 520, 8);
     }
 
-    button(header, "ASISTENTE", width - 430, 17, 126, 50, ActionCode::OpenAssistant, 0, 0, nullptr,
+    button(header, "INICIO", width - 430, 17, 126, 50, ActionCode::GoHome, 0, 0, nullptr,
            PANEL_ALT, VIOLET);
     button(header, "HISTORIAL", width - 294, 17, 126, 50, ActionCode::OpenHistory);
     button(header, "+ NUEVA MISIÓN", width - 158, 17, 144, 50, ActionCode::NewMission, 0, 0, nullptr, ACCENT_SOFT,
@@ -527,7 +838,7 @@ void AppUi::render_assistant()
     lv_obj_set_width(scope, 310);
     lv_obj_set_style_text_align(scope, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
     lv_obj_set_pos(scope, width - 470, 26);
-    button(header, "PRODUCTIVIDAD", width - 150, 14, 132, 50, ActionCode::CloseAssistant);
+    button(header, "INICIO", width - 150, 14, 132, 50, ActionCode::GoHome);
 
     const int stage_width = portrait ? width - margin * 2 : (width * 65) / 100;
     const int stage_height = portrait ? std::min(700, (usable_height * 63) / 100) : usable_height;
@@ -1081,7 +1392,6 @@ void AppUi::render_editor(bool search_only)
     lv_textarea_set_text(title_textarea_, search_only ? search_query_.c_str() : editor_title_.c_str());
     lv_obj_add_event_cb(title_textarea_, action_callback, LV_EVENT_FOCUSED, make_action(ActionCode::FocusTitle));
 
-    int controls_bottom = 162 + kStatusBarHeight;
     if (!search_only) {
         if (utf8_codepoint_count(editor_title_) > 80) {
             lv_obj_t* warning = label(screen_, "ACORTA EL TÍTULO A 80 CARACTERES", &FONT_LABEL, DANGER);
@@ -1097,36 +1407,45 @@ void AppUi::render_editor(bool search_only)
         lv_textarea_set_text(description_textarea_, editor_description_.c_str());
         lv_obj_add_event_cb(description_textarea_, action_callback, LV_EVENT_FOCUSED,
                             make_action(ActionCode::FocusDescription));
+        const bool portrait = height > width;
+        const int rank_y = 258 + kStatusBarHeight;
         lv_obj_t* rank_caption = label(screen_, "RANGO", &FONT_LABEL, CYAN);
-        lv_obj_set_pos(rank_caption, 22, 266 + kStatusBarHeight);
+        lv_obj_set_pos(rank_caption, 22, rank_y + 8);
         for (int index = 0; index < 6; ++index) {
             const MissionRank rank = rank_from_index(index);
-            button(screen_, rank_to_string(rank), 92 + index * 58, 258 + kStatusBarHeight, 48, 48,
+            button(screen_, rank_to_string(rank), 92 + index * 58, rank_y, 48, 48,
                    ActionCode::SelectRank, 0, index, nullptr, editor_rank_ == rank ? ACCENT_SOFT : PANEL_ALT,
                    editor_rank_ == rank ? rank_color(rank) : LINE);
         }
         lv_obj_t* reminder_caption = label(screen_, "RECORDATORIO", &FONT_LABEL, CYAN);
-        lv_obj_set_pos(reminder_caption, 470, 266 + kStatusBarHeight);
-        button(screen_, editor_reminder_enabled_ ? "ACTIVO" : "APAGADO", 610, 258 + kStatusBarHeight, 100, 48,
+        const int reminder_y = portrait ? rank_y + 58 : rank_y;
+        const int reminder_x = portrait ? 22 : 470;
+        const int reminder_control_x = portrait ? 190 : 610;
+        lv_obj_set_pos(reminder_caption, reminder_x, reminder_y + 8);
+        button(screen_, editor_reminder_enabled_ ? "ACTIVO" : "APAGADO", reminder_control_x, reminder_y, 100, 48,
                ActionCode::ReminderToggle, 0, 0, nullptr, editor_reminder_enabled_ ? ACCENT_SOFT : PANEL_ALT,
                editor_reminder_enabled_ ? CYAN : LINE);
-        button(screen_, "-", 722, 258 + kStatusBarHeight, 46, 48, ActionCode::ReminderMinus);
+        const int reminder_minus_x = portrait ? 304 : 722;
+        const int reminder_value_x = portrait ? 356 : 780;
+        const int reminder_plus_x = portrait ? 438 : 860;
+        button(screen_, "-", reminder_minus_x, reminder_y, 46, 48, ActionCode::ReminderMinus);
         char minutes[32];
         std::snprintf(minutes, sizeof(minutes), "%u MIN", editor_reminder_minutes_);
         reminder_value_label_ = label(screen_, minutes, &FONT_LABEL, TEXT);
-        lv_obj_set_pos(reminder_value_label_, 780, 272 + kStatusBarHeight);
-        button(screen_, "+", 860, 258 + kStatusBarHeight, 46, 48, ActionCode::ReminderPlus);
-        controls_bottom = 316 + kStatusBarHeight;
+        lv_obj_set_pos(reminder_value_label_, reminder_value_x, reminder_y + 14);
+        button(screen_, "+", reminder_plus_x, reminder_y, 46, 48, ActionCode::ReminderPlus);
     }
 
-    // El teclado en espanol lleva los acentos incorporados, asi que sustituye a la
-    // antigua barra de acentos y aprovecha su espacio para teclas mas grandes.
-    const int keyboard_y = controls_bottom + 10;
-    const int available = height - keyboard_y - 72;
-    keyboard_ = spanish_keyboard(20, keyboard_y, width - 40, std::min(360, available));
+    // El teclado queda acoplado al borde inferior. Las acciones del formulario
+    // ocupan una franja inmediatamente encima y el contenido nunca se dibuja por
+    // debajo del teclado, incluso en la orientación horizontal.
+    const int keyboard_height = height >= 1000 ? 404 : 292;
+    const int keyboard_y = height - keyboard_height - 20;
+    const int action_y = keyboard_y - 56;
+    keyboard_ = spanish_keyboard(24, keyboard_y, width - 48, keyboard_height);
 
-    button(screen_, "MICRÓFONO", 20, height - 62, 150, 48, ActionCode::OpenDictation);
-    button(screen_, search_only ? "APLICAR BÚSQUEDA" : "GUARDAR MISIÓN", width - 216, height - 62, 198, 48,
+    button(screen_, "MICRÓFONO", 20, action_y, 150, 48, ActionCode::OpenDictation);
+    button(screen_, search_only ? "APLICAR BÚSQUEDA" : "GUARDAR MISIÓN", width - 216, action_y, 198, 48,
            search_only ? ActionCode::ApplySearch : ActionCode::SaveMission, 0, 0, nullptr, ACCENT_SOFT, CYAN);
 
     set_active_textarea(title_textarea_);
@@ -1146,10 +1465,11 @@ void AppUi::render_dictation_setup()
            network_editor_open_ ? ActionCode::CancelNetworkEditor : ActionCode::CloseConnectivity);
 
     if (network_editor_open_) {
-        const int keyboard_height = std::min(330, std::max(230, height / 2 - 24));
-        const int keyboard_y = height - keyboard_height - 10;
+        const int keyboard_height = height >= 1000 ? 404 : 292;
+        const int keyboard_y = height - keyboard_height - 20;
+        const int action_y = keyboard_y - 56;
         lv_obj_t* form = panel(screen_, 18, 76 + kStatusBarHeight, width - 36,
-                               keyboard_y - 86 - kStatusBarHeight, false);
+                               action_y - 86 - kStatusBarHeight, false);
         const int field_width = width - 84;
         lv_obj_t* ssid_caption = label(form, "NOMBRE DE LA RED", &FONT_LABEL, CYAN);
         lv_obj_set_pos(ssid_caption, 24, 18);
@@ -1163,7 +1483,6 @@ void AppUi::render_dictation_setup()
         lv_textarea_set_text(ssid_textarea_, network_editor_.ssid.c_str());
         lv_obj_add_event_cb(ssid_textarea_, action_callback, LV_EVENT_FOCUSED,
                             make_action(ActionCode::FocusNetworkField, 0, 0));
-        int button_y = 114;
         if (network_editor_secured_) {
             lv_obj_t* password_caption = label(form, "CONTRASEÑA", &FONT_LABEL, CYAN);
             lv_obj_set_pos(password_caption, 24, 116);
@@ -1178,18 +1497,18 @@ void AppUi::render_dictation_setup()
             lv_textarea_set_text(password_textarea_, network_editor_.password.c_str());
             lv_obj_add_event_cb(password_textarea_, action_callback, LV_EVENT_FOCUSED,
                                 make_action(ActionCode::FocusNetworkField, 0, 1));
-            button_y = 214;
         }
-        button(form, network_connect_pending_ ? "CONECTANDO…" : "CONECTAR Y GUARDAR", 24, button_y,
-               std::min(260, field_width), 52,
-               ActionCode::ConnectAndSaveNetwork, 0, 0, nullptr, ACCENT_SOFT, CYAN);
         const std::string form_note = network_connect_pending_
             ? "Comprobando la red; todavía no se guardó la contraseña."
             : snapshot.error.empty() ? "La red solo se guardará después de obtener conexión." : snapshot.error;
         lv_obj_t* note = label(form, form_note.c_str(), &FONT_BODY, snapshot.error.empty() ? MUTED : DANGER);
-        lv_obj_set_pos(note, 304, button_y + 14);
-        lv_obj_set_width(note, std::max(200, field_width - 300));
-        keyboard_ = spanish_keyboard(18, keyboard_y, width - 36, keyboard_height);
+        lv_obj_set_pos(note, 24, network_editor_secured_ ? 214 : 116);
+        lv_obj_set_width(note, field_width);
+
+        button(screen_, network_connect_pending_ ? "CONECTANDO…" : "CONECTAR Y GUARDAR", 24, action_y,
+               std::min(270, width / 2), 48, ActionCode::ConnectAndSaveNetwork, 0, 0, nullptr,
+               ACCENT_SOFT, CYAN);
+        keyboard_ = spanish_keyboard(24, keyboard_y, width - 48, keyboard_height);
         set_active_textarea(network_editor_.ssid.empty() ? ssid_textarea_ :
                             (network_editor_secured_ ? password_textarea_ : ssid_textarea_));
         return;
@@ -1336,26 +1655,34 @@ void AppUi::apply_dictation_candidate()
 
 lv_obj_t* AppUi::spanish_keyboard(int x, int y, int width, int height)
 {
-    lv_obj_t* matrix = lv_buttonmatrix_create(screen_);
-    place(matrix, x, y, width, height);
-    lv_buttonmatrix_set_map(matrix, keyboard_upper_ ? kKeyboardUpper : kKeyboardLower);
-    lv_buttonmatrix_set_ctrl_map(matrix, kKeyboardCtrl);
+    lv_obj_t* dock = lv_obj_create(screen_);
+    place(dock, x, y, width, height);
+    lv_obj_set_style_bg_color(dock, color(PANEL), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(dock, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(dock, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(dock, theme::RadiusPanel, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(dock, 0, LV_PART_MAIN);
+    lv_obj_remove_flag(dock, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t* matrix = lv_buttonmatrix_create(dock);
+    place(matrix, 0, 0, width - 16, height - 16);
+    lv_obj_center(matrix);
     lv_obj_add_event_cb(matrix, action_callback, LV_EVENT_VALUE_CHANGED, make_action(ActionCode::KeyboardKey));
 
     lv_obj_set_style_bg_color(matrix, color(PANEL), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(matrix, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_border_width(matrix, 0, LV_PART_MAIN);
     lv_obj_set_style_radius(matrix, theme::RadiusPanel, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(matrix, 6, LV_PART_MAIN);
-    lv_obj_set_style_pad_row(matrix, 6, LV_PART_MAIN);
-    lv_obj_set_style_pad_column(matrix, 6, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(matrix, 5, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(matrix, 5, LV_PART_MAIN);
+    lv_obj_set_style_pad_column(matrix, 5, LV_PART_MAIN);
 
     lv_obj_set_style_bg_color(matrix, color(PANEL_ALT), LV_PART_ITEMS);
     lv_obj_set_style_bg_opa(matrix, LV_OPA_COVER, LV_PART_ITEMS);
     lv_obj_set_style_border_color(matrix, color(LINE), LV_PART_ITEMS);
     lv_obj_set_style_border_width(matrix, theme::BorderWidth, LV_PART_ITEMS);
     lv_obj_set_style_radius(matrix, theme::RadiusControl, LV_PART_ITEMS);
-    lv_obj_set_style_text_font(matrix, &FONT_LABEL, LV_PART_ITEMS);
+    lv_obj_set_style_text_font(matrix, &keyboard_font(), LV_PART_ITEMS);
     lv_obj_set_style_text_color(matrix, color(TEXT), LV_PART_ITEMS);
     lv_obj_set_style_bg_color(matrix, color(VIOLET), static_cast<lv_style_selector_t>(LV_PART_ITEMS) |
                                                        static_cast<lv_style_selector_t>(LV_STATE_PRESSED));
@@ -1366,13 +1693,73 @@ lv_obj_t* AppUi::spanish_keyboard(int x, int y, int width, int height)
                                                        static_cast<lv_style_selector_t>(LV_STATE_CHECKED));
     lv_obj_set_style_text_color(matrix, color(CYAN), static_cast<lv_style_selector_t>(LV_PART_ITEMS) |
                                                      static_cast<lv_style_selector_t>(LV_STATE_CHECKED));
+    keyboard_ = matrix;
+    update_keyboard_map();
     return matrix;
+}
+
+void AppUi::update_keyboard_map()
+{
+    if (keyboard_ == nullptr) return;
+
+    const char* const* map = nullptr;
+    if (keyboard_page_ == KeyboardPage::Letters) {
+        map = keyboard_upper_ ? kKeyboardUpper : kKeyboardLower;
+    } else if (keyboard_page_ == KeyboardPage::Numbers) {
+        map = keyboard_upper_ ? kKeyboardNumbersUpper : kKeyboardNumbersLower;
+    } else {
+        map = kKeyboardSymbols;
+    }
+    lv_buttonmatrix_set_map(keyboard_, map);
+
+    const uint32_t shift_id = keyboard_page_ == KeyboardPage::Letters ? 20
+                              : keyboard_page_ == KeyboardPage::Numbers ? 32 : UINT32_MAX;
+    const uint32_t count = keyboard_page_ == KeyboardPage::Letters ? 34
+                           : keyboard_page_ == KeyboardPage::Numbers ? 36 : 37;
+    for (uint32_t index = 0; index < count; ++index) {
+        const char* key = lv_buttonmatrix_get_button_text(keyboard_, index);
+        if (key == nullptr) continue;
+        uint8_t width = 1;
+        if (keyboard_page_ == KeyboardPage::Letters) {
+            if (std::strcmp(key, LV_SYMBOL_UP) == 0) width = 2;
+            else if (std::strcmp(key, LV_SYMBOL_BACKSPACE) == 0) width = 3;
+            else if (std::strcmp(key, "ESPACIO") == 0) width = 6;
+            else if (std::strcmp(key, LV_SYMBOL_NEW_LINE) == 0 || std::strcmp(key, "123") == 0) width = 3;
+        } else {
+            if (std::strcmp(key, LV_SYMBOL_UP) == 0) width = 3;
+            else if (std::strcmp(key, LV_SYMBOL_BACKSPACE) == 0) width = 4;
+            else if (std::strcmp(key, "ESPACIO") == 0) width = 7;
+            else if (std::strcmp(key, LV_SYMBOL_NEW_LINE) == 0 || std::strcmp(key, "123") == 0 ||
+                     std::strcmp(key, "ABC") == 0 || std::strcmp(key, "#+=") == 0) width = 3;
+        }
+        lv_buttonmatrix_set_button_width(keyboard_, index, width);
+    }
+    if (keyboard_upper_ && shift_id != UINT32_MAX) {
+        lv_buttonmatrix_set_button_ctrl(keyboard_, shift_id, LV_BUTTONMATRIX_CTRL_CHECKED);
+    } else if (shift_id != UINT32_MAX) {
+        lv_buttonmatrix_clear_button_ctrl(keyboard_, shift_id, LV_BUTTONMATRIX_CTRL_CHECKED);
+    }
 }
 
 void AppUi::handle_key(const char* text)
 {
     if (text == nullptr || active_textarea_ == nullptr) return;
-    if (std::strcmp(text, "BORRAR") == 0) {
+    if (std::strcmp(text, "123") == 0) {
+        keyboard_page_ = KeyboardPage::Numbers;
+        update_keyboard_map();
+        return;
+    }
+    if (std::strcmp(text, "#+=") == 0) {
+        keyboard_page_ = KeyboardPage::Symbols;
+        update_keyboard_map();
+        return;
+    }
+    if (std::strcmp(text, "ABC") == 0) {
+        keyboard_page_ = KeyboardPage::Letters;
+        update_keyboard_map();
+        return;
+    }
+    if (std::strcmp(text, LV_SYMBOL_BACKSPACE) == 0) {
         lv_textarea_delete_char(active_textarea_);
         return;
     }
@@ -1380,21 +1767,14 @@ void AppUi::handle_key(const char* text)
         lv_textarea_add_text(active_textarea_, " ");
         return;
     }
-    if (std::strcmp(text, "INTRO") == 0) {
+    if (std::strcmp(text, LV_SYMBOL_NEW_LINE) == 0) {
         // Las areas de una linea ignoran el salto (el titulo); la descripcion lo usa.
         lv_textarea_add_text(active_textarea_, "\n");
         return;
     }
-    if (std::strcmp(text, "MAYÚS") == 0) {
+    if (std::strcmp(text, LV_SYMBOL_UP) == 0) {
         keyboard_upper_ = !keyboard_upper_;
-        lv_buttonmatrix_set_map(keyboard_, keyboard_upper_ ? kKeyboardUpper : kKeyboardLower);
-        lv_buttonmatrix_set_ctrl_map(keyboard_, kKeyboardCtrl);
-        // El mapa de control se reaplica entero, asi que el resaltado va despues.
-        if (keyboard_upper_) {
-            lv_buttonmatrix_set_button_ctrl(keyboard_, kShiftButton, LV_BUTTONMATRIX_CTRL_CHECKED);
-        } else {
-            lv_buttonmatrix_clear_button_ctrl(keyboard_, kShiftButton, LV_BUTTONMATRIX_CTRL_CHECKED);
-        }
+        update_keyboard_map();
         return;
     }
     lv_textarea_add_text(active_textarea_, text);
@@ -1845,14 +2225,23 @@ void AppUi::dispatch(const Action& action)
         case ActionCode::MoveUp: service_.move_in_focus(action.id, -1); break;
         case ActionCode::MoveDown: service_.move_in_focus(action.id, 1); break;
         case ActionCode::OpenAssistant:
-            overlay_ = Overlay::None;
-            assistant_.open(static_cast<uint64_t>(esp_timer_get_time() / 1000));
-            view_ = View::Assistant;
+            open_module(ModuleId::Assistant);
             break;
         case ActionCode::CloseAssistant:
             assistant_voice_.cancel();
             assistant_.close(static_cast<uint64_t>(esp_timer_get_time() / 1000));
-            view_ = View::Dashboard;
+            view_ = View::Home;
+            break;
+        case ActionCode::OpenModule:
+            open_module(static_cast<ModuleId>(action.value));
+            break;
+        case ActionCode::GoHome:
+            if (view_ == View::Assistant) {
+                assistant_voice_.cancel();
+                assistant_.close(static_cast<uint64_t>(esp_timer_get_time() / 1000));
+            }
+            overlay_ = Overlay::None;
+            view_ = View::Home;
             break;
         case ActionCode::AssistantTap:
             assistant_.tap(static_cast<uint64_t>(esp_timer_get_time() / 1000));
@@ -2274,9 +2663,10 @@ void AppUi::tick()
         last_second = now_second;
         refresh_statusbar();
         const Mission* active = find_mission(state_, state_.focus.active_id);
-        if (active != nullptr && timer_label_ != nullptr) {
-            lv_label_set_text(timer_label_, duration_text(service_.current_elapsed(*active)).c_str());
-            const int checkpoint_slot = static_cast<int>(service_.current_elapsed(*active) / 30);
+        if (active != nullptr) {
+            const uint32_t elapsed = service_.current_elapsed(*active);
+            if (timer_label_ != nullptr) lv_label_set_text(timer_label_, duration_text(elapsed).c_str());
+            const int checkpoint_slot = static_cast<int>(elapsed / 30);
             if (checkpoint_slot != last_checkpoint_second_) {
                 last_checkpoint_second_ = checkpoint_slot;
                 service_.checkpoint();
@@ -2301,10 +2691,14 @@ void AppUi::tick()
 
     const bool rotation_locked = view_ == View::Editor || view_ == View::SearchEditor || view_ == View::ClockSetup ||
                                  view_ == View::DictationSetup || overlay_ != Overlay::None || screen_off_ ||
-                                 dictation_.busy() || assistant_voice_.busy();
+                                 dictation_.busy() || assistant_voice_.busy() || home_rotation_active_ || render_pending_;
+    const int next = orientation_.poll();
     if (!rotation_locked) {
-        const int next = orientation_.poll();
+        last_rotation_lock_ = -1;
         if (next >= 0 && next != current_rotation_) set_rotation(next);
+    } else if (next >= 0 && next != current_rotation_ && next != last_rotation_lock_) {
+        last_rotation_lock_ = next;
+        ESP_LOGI(TAG_UI, "Rotación %d pendiente hasta cerrar formulario, diálogo o actividad", next);
     }
 }
 
@@ -2350,17 +2744,52 @@ void AppUi::save_clock()
         return;
     }
     service_.save();
-    view_ = View::Dashboard;
-    if (!state_.settings.tutorial_completed) overlay_ = Overlay::Tutorial;
+    view_ = View::Home;
+}
+
+void AppUi::open_module(ModuleId module)
+{
+    const ModuleDescriptor* descriptor = find_module(module);
+    if (descriptor == nullptr) return;
+    overlay_ = Overlay::None;
+    if (module == ModuleId::Productivity) {
+        view_ = View::Dashboard;
+        if (!state_.settings.tutorial_completed) overlay_ = Overlay::Tutorial;
+        return;
+    }
+    if (module == ModuleId::Assistant) {
+        assistant_.open(static_cast<uint64_t>(esp_timer_get_time() / 1000));
+        view_ = View::Assistant;
+    }
 }
 
 void AppUi::set_rotation(int rotation)
 {
     static const lv_display_rotation_t rotations[] = {LV_DISPLAY_ROTATION_0, LV_DISPLAY_ROTATION_90,
                                                        LV_DISPLAY_ROTATION_180, LV_DISPLAY_ROTATION_270};
-    current_rotation_ = std::clamp(rotation, 0, 3);
+    const int next = std::clamp(rotation, 0, 3);
+    if (next == current_rotation_) return;
+    if (home_rotation_supported_ && view_ == View::Home && overlay_ == Overlay::None && !screen_off_) {
+        lv_obj_update_layout(screen_);
+        const int width = lv_display_get_horizontal_resolution(display_);
+        const int height = lv_display_get_vertical_resolution(display_);
+        home_rotation_turns_ = shortest_rotation_turns(current_rotation_, next);
+        home_rotation_sources_.clear();
+        for (uint32_t i = 0; i < lv_obj_get_child_count(screen_); ++i) {
+            lv_obj_t* object = lv_obj_get_child(screen_, i);
+            if (object == home_sandbox_) continue;
+            lv_area_t area{};
+            lv_obj_get_coords(object, &area);
+            home_rotation_sources_.push_back(rotate_screen_point(
+                {(area.x1 + area.x2 + 1) * 0.5f, (area.y1 + area.y2 + 1) * 0.5f},
+                width, height, home_rotation_turns_));
+        }
+        home_rotation_pending_ = true;
+    }
+    current_rotation_ = next;
     orientation_.set_current(current_rotation_);
     lv_display_set_rotation(display_, rotations[current_rotation_]);
+    ESP_LOGI(TAG_UI, "Rotación aplicada: %d%s", next, home_rotation_pending_ ? " (Inicio animado)" : "");
     schedule_render();
 }
 
@@ -2440,10 +2869,10 @@ std::string AppUi::status_net_text() const
 std::string AppUi::status_power_text()
 {
     const PowerStatus status = power_.poll();
-    // Sin batería el equipo solo puede estar corriendo por USB.
-    if (status.battery_pct < 0) return "USB";
+    if (status.state == BatteryState::Unavailable) return "BAT --%";
+    if (status.state == BatteryState::Missing) return "USB · SIN BAT";
     char output[40];
-    std::snprintf(output, sizeof(output), "%sBAT %d%%", status.charging ? "USB · " : "", status.battery_pct);
+    std::snprintf(output, sizeof(output), "%sBAT ~%d%%", status.charging ? "CARGA · " : "", status.battery_pct);
     return output;
 }
 
@@ -2455,7 +2884,22 @@ void AppUi::refresh_statusbar()
         last_status_clock_ = clock_text;
         lv_label_set_text(status_clock_label_, clock_text.c_str());
     }
-    // La red y la energía implican lecturas I2C: cada 5 s basta.
+    if (clock_text != last_status_clock_ || home_time_label_ != nullptr) {
+        // En Inicio, el reloj y la fecha son el primer elemento de navegación;
+        // la barra superior se reserva para conectividad y batería.
+        last_status_clock_ = clock_text;
+        const size_t separator = clock_text.find(' ');
+        if (home_time_label_ != nullptr) {
+            const std::string time_text = separator == std::string::npos ? clock_text : clock_text.substr(0, separator);
+            lv_label_set_text(home_time_label_, time_text.c_str());
+        }
+        if (home_date_label_ != nullptr) {
+            const std::string date_text = separator == std::string::npos ? "" : clock_text.substr(separator + 1);
+            lv_label_set_text(home_date_label_, date_text.c_str());
+        }
+    }
+    // Estos estados se leen de snapshots; los workers realizan I2C/red.
+    // Refrescar las etiquetas cada 5 s basta.
     const int64_t now = clock_.now_utc();
     if (last_status_second_ >= 0 && now - last_status_second_ < 5) return;
     last_status_second_ = now;
@@ -2463,7 +2907,10 @@ void AppUi::refresh_statusbar()
     if (net_text != last_status_net_ && status_net_label_ != nullptr) {
         last_status_net_ = net_text;
         lv_label_set_text(status_net_label_, net_text.c_str());
-        lv_obj_set_style_text_color(status_net_label_, color(dictation_.wifi_connected() ? CYAN : MUTED),
+        const bool home = view_ == View::Home;
+        lv_obj_set_style_text_color(status_net_label_,
+                                    color(dictation_.wifi_connected() ? (home ? theme::HomeInk : CYAN)
+                                                                      : (home ? theme::HomeMuted : MUTED)),
                                     LV_PART_MAIN);
     }
     const std::string power_text = status_power_text();

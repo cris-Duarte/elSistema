@@ -1,7 +1,7 @@
 # Lineamientos de UI y calidad visual
 
 Estándar de identidad visual y calidad de interfaz para el firmware de El Sistema
-(M5Stack Tab5, pantalla táctil de 5", 1280×720, ESP32‑P4).
+(M5Stack Tab5, pantalla táctil de 5", 1280×720 y 720×1280, ESP32‑P4).
 
 Este documento **no** define funcionalidad, arquitectura ni features. Define cómo
 se ve y se siente la app, y el criterio de decisión para todo trabajo de interfaz.
@@ -40,9 +40,11 @@ estilo RPG. Ya existen código, pantallas y componentes implementados.
 
 ## 3. Filosofía de diseño
 
-"El Sistema, refinado": la estética del sistema de nivelación de Solo Leveling
-(ventanas holográficas cian, jerarquía RPG, notificaciones del Sistema) ejecutada
-con la disciplina del diseño de Apple.
+El Sistema usa dos contextos visuales intencionales. **Inicio** es el espacio de
+entrada: negro, lúdico, táctil y con partículas de luz. **Productividad y
+Asistente** conservan el HUD oscuro de fantasía/RPG que ya tienen. No se debe
+forzar una paleta única entre Inicio y los módulos: la coherencia se mantiene en
+tipografía, escala táctil, claridad, ritmo y calidad de ejecución.
 
 - **Claridad antes que decoración.** El neón y el estilo HUD son acento, nunca
   ruido que degrade la legibilidad.
@@ -54,11 +56,36 @@ con la disciplina del diseño de Apple.
   da feedback. Nada se mueve "por verse bien".
 - **Feedback inmediato.** Toda interacción produce respuesta visual en <100 ms,
   aunque la acción real tome más tiempo.
-- **Consistencia total.** Un solo diseño por concepto en toda la app.
+- **Consistencia por contexto.** Un único diseño por concepto dentro de cada
+  contexto; Inicio y los módulos pueden tener identidades distintas.
 
 ## 4. Identidad visual
 
-### Paleta
+### Paletas
+
+#### Inicio
+
+| Uso | Valor |
+|---|---|
+| Fondo negro puro | `#000000` |
+| Superficie auxiliar | `#10161F` |
+| Texto principal | `#F0F7FF` |
+| Texto secundario | `#A7B4C4` |
+| Pictogramas de iconos claros | `#17202B` |
+| Acción azul cielo | `#6FC2FF` |
+| Acento amarillo | `#FFDE00` |
+| Partículas de luz | centro `#FFFDF8`; tintes azul `#B6ECFF`, cálido `#FFE6AD`, rosa `#FFD0E8` y lavanda `#D9D0FF` |
+
+Usar contornos oscuros de 2 px, esquinas casi cuadradas y sombra corta, dura y
+desplazada. Los módulos se representan con iconos compactos tipo aplicación de
+teléfono y nombre debajo, no con tarjetas grandes. El fondo de partículas cubre
+toda la pantalla por detrás de los controles, con perfiles radiales suaves y
+núcleos casi blancos de tamaño reducido. Los halos superpuestos suman luz.
+El azul identifica Productividad; el amarillo
+distingue Asistente. Texto claro sobre placas negras protege la legibilidad.
+No reutilizar la mascota, ilustraciones, logotipo ni recursos de MotherDuck.
+
+#### Módulos: Productividad y Asistente
 
 | Uso | Valor |
 |---|---|
@@ -71,7 +98,10 @@ con la disciplina del diseño de Apple.
 | Texto principal | `#E8F2FF` |
 | Texto secundario | `#7A8CA3` |
 
-El cian es acento: **nunca más de ~10 % del área de pantalla**.
+En el HUD oscuro, el cian es acento: **nunca más de ~10 % del área de pantalla**.
+En Inicio, el azul y el amarillo se limitan a acciones, índices y pequeñas
+marcas; domina el fondo negro. Los tintes multicolor se limitan a las partículas,
+no al relleno de superficies ni al texto corrido.
 
 ### Tipografía
 
@@ -82,18 +112,22 @@ El cian es acento: **nunca más de ~10 % del área de pantalla**.
 
 ### Forma y materiales
 
-- **Ventanas del Sistema:** paneles con marco cian fino (1–2 px) y brillo sutil
-  simulado (borde interior más claro que el exterior).
-- Esquinas redondeadas moderadas (8–12 px); esquinas cortadas tipo HUD solo en
-  elementos de máximo foco (modales, nivel, rango).
+- **Ventanas del Sistema (módulos oscuros):** paneles con marco cian fino (1–2 px)
+  y brillo sutil simulado (borde interior más claro que el exterior).
+- **Inicio:** iconos compactos de borde oscuro firme de 2 px, radio de 8 px y
+  sombra corta y dura desplazada, sobre negro con partículas de luz.
+- Los módulos oscuros conservan esquinas moderadamente redondeadas (8–12 px) y
+  esquinas cortadas tipo HUD solo en elementos de máximo foco.
 - Scanlines/glitch: solo como micro‑detalle estático de fondo o transición
   puntual. Nunca persistentes ni animados en reposo.
 
 ## 5. Componentes del Sistema (requisitos visuales)
 
-- **Ventana del Sistema:** diálogos y notificaciones con marco característico y
-  encabezado tipo `[ SISTEMA ]` / `⚠ ALERTA`. Un solo estilo, idéntico en toda la
-  app.
+- **Ventana del Sistema (módulos):** diálogos y notificaciones con marco
+  característico y encabezado tipo `[ SISTEMA ]` / `⚠ ALERTA`. Un solo estilo
+  dentro de los módulos.
+- **Iconos de Inicio:** pictograma simple de 96×96 px con nombre debajo y zona
+  táctil amplia de 152×148 px; no son paneles HUD ni tarjetas descriptivas.
 - **Barras de progreso (XP, nivel):** delgadas, con pulso de luz al llenarse.
   Feedback visible al ganar XP.
 - **Elementos RPG (nivel, rango E–S, stats):** misma jerarquía tipográfica que el
@@ -107,14 +141,19 @@ El cian es acento: **nunca más de ~10 % del área de pantalla**.
 
 - Duración estándar 200–350 ms con curvas ease‑out o springs cortos. Nada lineal,
   nada brusco, nada largo.
-- Interpolar **solo** propiedades baratas: opacidad, posición, escala. Sin blur en
+- Interpolar propiedades baratas: opacidad, posición y escala. La transición
+  de orientación de Inicio es la excepción acotada: giro de los controles
+  durante 320 ms, no del canvas de fondo ni de toda la pantalla. Sin blur en
   tiempo real ni blend modes costosos.
 - Direcciones coherentes: modales desde el centro con escala sutil; listas desde
   desplazamiento.
 - **Completar una misión:** celebración contenida (0,5–1 s: pulso, +XP flotante,
   brillo en la barra) que nunca bloquee la interacción.
-- La estabilidad del framerate es parte de la calidad: si una animación compromete
-  los 60 fps, simplificarla. Un 60 fps estable vale más que cualquier efecto.
+- La estabilidad del framerate es parte de la calidad. La física de partículas
+  de Inicio funciona solo mientras Inicio está visible, como fondo completo y
+  con objetivo de 50 fps (validar 30–60 fps en el dispositivo). Se compone en
+  canvas dobles en PSRAM, detrás de controles y textos con contraste protegido;
+  no puede competir con el tacto. En el resto de la interfaz se prioriza fluidez.
 
 ## 7. Interacción y feedback
 
@@ -130,7 +169,7 @@ El cian es acento: **nunca más de ~10 % del área de pantalla**.
 - Glitch/ruido constante mientras el usuario lee o navega.
 - Animaciones largas que bloqueen o interrumpan la interacción.
 - Elementos decorativos que no comuniquen jerarquía, estado o física.
-- Dos versiones del mismo componente en distintos flujos.
+- Dos versiones del mismo componente dentro de un contexto visual.
 - Rediseños totales por preferencia: cambios visuales graduales y trazables a
   estos lineamientos.
 
@@ -144,7 +183,8 @@ Antes de terminar cualquier tarea que toque UI:
 - [ ] Animaciones solo con propiedades baratas y framerate estable
 - [ ] Estados definidos: presionado, vacío, carga, error, éxito
 - [ ] Sin variantes nuevas de componentes existentes
-- [ ] Cian ≈ acento (< ~10 % de pantalla), texto siempre legible
+- [ ] En módulos, cian ≈ acento (< ~10 %); en Inicio predomina negro y el neón se limita a partículas
+- [ ] Texto siempre legible y contrastado
 - [ ] Deuda visual detectada fuera de alcance: registrada
 
 ## 10. Criterio final

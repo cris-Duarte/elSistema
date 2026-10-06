@@ -21,12 +21,23 @@
 #include "driver/ppa.h"
 #include "esp_heap_caps.h"
 #include "esp_private/esp_cache_private.h"
+#include "soc/ppa_struct.h"
 
 #define ALIGN_UP_BY(num, align) (((num) + ((align)-1)) & ~((align)-1))
 #define BLOCK_SIZE_SMALL        (32)
 #define BLOCK_SIZE_LARGE        (256)
 static ppa_client_handle_t ppa_srm_handle = NULL;
 static size_t data_cache_line_size        = 0;
+static StaticSemaphore_t ppa_done_storage;
+static SemaphoreHandle_t ppa_done_sem;
+static bool ppa_unavailable;
+
+static bool IRAM_ATTR lvgl_port_ppa_done(ppa_client_handle_t client, ppa_event_data_t* event, void* user_data)
+{
+    BaseType_t wake = pdFALSE;
+    xSemaphoreGiveFromISR((SemaphoreHandle_t)user_data, &wake);
+    return wake == pdTRUE;
+}
 
 #if CONFIG_IDF_TARGET_ESP32S3 && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
 #include "esp_lcd_panel_rgb.h"
@@ -59,6 +70,7 @@ typedef struct {
     esp_lcd_panel_handle_t control_handle; /* LCD panel control handle */
     lvgl_port_rotation_cfg_t rotation;     /* Default values of the screen rotation */
     lv_color_t* draw_buffs[3];             /* Display draw buffers */
+    void* ppa_rotation_buffer;             /* Isolated DMA target, never the CPU fallback buffer */
     uint8_t* oled_buffer;
     lv_display_t* disp_drv; /* LVGL display driver */
     lv_display_rotation_t current_rotation;
@@ -136,6 +148,16 @@ lv_display_t* lvgl_port_add_disp_dsi(const lvgl_port_display_cfg_t* disp_cfg,
         .oper_type = PPA_OPERATION_SRM,
     };
     ESP_ERROR_CHECK(ppa_register_client(&ppa_srm_config, &ppa_srm_handle));
+    // Backport the register setting from Espressif's official PPA hang
+    // workaround without changing the user's shared ESP-IDF installation.
+    // IDF 5.4.2 does not yet expose ppa_ll_srm_bypass_mb_order(). This port is
+    // the sole owner of the SRM client, and the driver preserves this bit.
+    // esp-iot-solution/esp_lvgl_adapter: 0001-bugfix-ppa-Temporary-fix-for-the-PPA-hang-issue.patch
+    PPA.sr_byte_order.sr_macro_bk_ro_bypass = 1;
+    ppa_done_sem = xSemaphoreCreateBinaryStatic(&ppa_done_storage);
+    assert(ppa_done_sem != NULL);
+    const ppa_event_callbacks_t ppa_callbacks = {.on_trans_done = lvgl_port_ppa_done};
+    ESP_ERROR_CHECK(ppa_client_register_event_callbacks(ppa_srm_handle, &ppa_callbacks));
     ESP_ERROR_CHECK(esp_cache_get_alignment(MALLOC_CAP_SPIRAM, &data_cache_line_size));
 
     assert(dsi_cfg != NULL);
@@ -226,17 +248,22 @@ esp_err_t lvgl_port_remove_disp(lv_display_t* disp)
     lv_disp_remove(disp);
     lvgl_port_unlock();
 
-    if (disp_ctx->draw_buffs[0]) {
+    // After a PPA timeout its input may still be referenced by DMA. Retain
+    // both possible source buffers, just like the isolated destination.
+    if (disp_ctx->draw_buffs[0] && !ppa_unavailable) {
         free(disp_ctx->draw_buffs[0]);
     }
 
-    if (disp_ctx->draw_buffs[1]) {
+    if (disp_ctx->draw_buffs[1] && !ppa_unavailable) {
         free(disp_ctx->draw_buffs[1]);
     }
 
     if (disp_ctx->draw_buffs[2]) {
         free(disp_ctx->draw_buffs[2]);
     }
+    // A timed-out engine may still own this buffer. Keep it until reboot,
+    // rather than let a late DMA completion write into reused application RAM.
+    if (disp_ctx->ppa_rotation_buffer && !ppa_unavailable) free(disp_ctx->ppa_rotation_buffer);
 
     if (disp_ctx->oled_buffer) {
         free(disp_ctx->oled_buffer);
@@ -428,6 +455,11 @@ static lv_display_t* lvgl_port_add_disp_priv(const lvgl_port_display_cfg_t* disp
             heap_caps_aligned_alloc(data_cache_line_size, buffer_size * color_bytes, buff_caps);
         ESP_GOTO_ON_FALSE(disp_ctx->draw_buffs[2], ESP_ERR_NO_MEM, err, TAG,
                           "Not enough memory for LVGL buffer (rotation buffer) allocation!");
+        if (ppa_srm_handle != NULL) {
+            disp_ctx->ppa_rotation_buffer =
+                heap_caps_aligned_alloc(data_cache_line_size, buffer_size * color_bytes, buff_caps);
+            if (disp_ctx->ppa_rotation_buffer == NULL) ESP_LOGW(TAG, "PPA scratch unavailable; using CPU rotation");
+        }
     }
 
 err:
@@ -441,6 +473,7 @@ err:
         if (disp_ctx->draw_buffs[2]) {
             free(disp_ctx->draw_buffs[2]);
         }
+        if (disp_ctx->ppa_rotation_buffer) free(disp_ctx->ppa_rotation_buffer);
         if (disp_ctx->oled_buffer) {
             free(disp_ctx->oled_buffer);
         }
@@ -612,7 +645,7 @@ void lvgl_port_rotate_area(lv_display_t* disp, lv_area_t* area)
     }
 }
 
-IRAM_ATTR static void rotate_copy_pixel(const uint16_t* from, uint16_t* to, uint16_t x_start, uint16_t y_start,
+static esp_err_t rotate_copy_pixel(const uint16_t* from, uint16_t* to, uint16_t x_start, uint16_t y_start,
                                         uint16_t x_end, uint16_t y_end, uint16_t w, uint16_t h, uint16_t rotation)
 {
     ppa_srm_rotation_angle_t ppa_rotation;
@@ -652,7 +685,7 @@ IRAM_ATTR static void rotate_copy_pixel(const uint16_t* from, uint16_t* to, uint
         .in.srm_cm         = (LV_COLOR_DEPTH == 24) ? PPA_SRM_COLOR_MODE_RGB888 : PPA_SRM_COLOR_MODE_RGB565,
 
         .out.buffer      = to,
-        .out.buffer_size = ALIGN_UP_BY(sizeof(lv_color_t) * w * h, data_cache_line_size),
+        .out.buffer_size = ALIGN_UP_BY(((LV_COLOR_DEPTH == 24) ? 3 : 2) * w * h, data_cache_line_size),
         .out.pic_w = (ppa_rotation == PPA_SRM_ROTATION_ANGLE_90 || ppa_rotation == PPA_SRM_ROTATION_ANGLE_270) ? h : w,
         .out.pic_h = (ppa_rotation == PPA_SRM_ROTATION_ANGLE_90 || ppa_rotation == PPA_SRM_ROTATION_ANGLE_270) ? w : h,
         .out.block_offset_x = x_offset,
@@ -664,10 +697,21 @@ IRAM_ATTR static void rotate_copy_pixel(const uint16_t* from, uint16_t* to, uint
         .scale_y        = 1.0,
         .rgb_swap       = 0,
         .byte_swap      = 0,
-        .mode           = PPA_TRANS_MODE_BLOCKING,
+        .mode           = PPA_TRANS_MODE_NON_BLOCKING,
+        .user_data      = ppa_done_sem,
     };
 
-    ESP_ERROR_CHECK(ppa_do_scale_rotate_mirror(ppa_srm_handle, &oper_config));
+    if (ppa_unavailable) return ESP_ERR_INVALID_STATE;
+    xSemaphoreTake(ppa_done_sem, 0);
+    esp_err_t result = ppa_do_scale_rotate_mirror(ppa_srm_handle, &oper_config);
+    if (result == ESP_OK && xSemaphoreTake(ppa_done_sem, pdMS_TO_TICKS(100)) != pdTRUE) {
+        result = ESP_ERR_TIMEOUT;
+    }
+    if (result != ESP_OK) {
+        ppa_unavailable = true;
+        ESP_LOGE(TAG, "PPA rotation failed (%s); switching to isolated CPU fallback", esp_err_to_name(result));
+    }
+    return result;
 }
 
 static void lvgl_port_flush_callback(lv_display_t* drv, const lv_area_t* area, uint8_t* color_map)
@@ -694,27 +738,29 @@ static void lvgl_port_flush_callback(lv_display_t* drv, const lv_area_t* area, u
             lv_color_format_t cf = lv_display_get_color_format(drv);
             uint32_t w_stride    = lv_draw_buf_width_to_stride(ww, cf);
             uint32_t h_stride    = lv_draw_buf_width_to_stride(hh, cf);
-            if (disp_ctx->current_rotation == LV_DISPLAY_ROTATION_180) {
-                lv_draw_sw_rotate(color_map, disp_ctx->draw_buffs[2], hh, ww, h_stride, h_stride,
-                                  LV_DISPLAY_ROTATION_180, cf);
-            } else if (disp_ctx->current_rotation == LV_DISPLAY_ROTATION_90) {
-                // printf("%ld %ld\n", w_stride, h_stride);
-                // lv_draw_sw_rotate(color_map, disp_ctx->draw_buffs[2], ww, hh, w_stride, h_stride,
-                //                   LV_DISPLAY_ROTATION_90, cf);
-                // rotate_copy_pixel((uint16_t*)color_map, (uint16_t*)disp_ctx->draw_buffs[2], offsetx1, offsety1,
-                //                   offsetx2, offsety2, LV_HOR_RES, LV_VER_RES, 270);
-                rotate_copy_pixel((uint16_t*)color_map, (uint16_t*)disp_ctx->draw_buffs[2], 0, 0, offsetx2 - offsetx1,
-                                  offsety2 - offsety1, offsetx2 - offsetx1 + 1, offsety2 - offsety1 + 1, 270);
-            } else if (disp_ctx->current_rotation == LV_DISPLAY_ROTATION_270) {
-                lv_draw_sw_rotate(color_map, disp_ctx->draw_buffs[2], ww, hh, w_stride, h_stride,
-                                  LV_DISPLAY_ROTATION_270, cf);
+            void* rotated_pixels = disp_ctx->draw_buffs[2];
+            // Keep PPA acceleration without its unbounded blocking wait.
+            // A stuck SRM (IDFGH-18204/18292) cannot freeze the UI or write
+            // into the separate buffer used by the CPU fallback.
+            const uint16_t angle = disp_ctx->current_rotation == LV_DISPLAY_ROTATION_90 ? 270 :
+                                   disp_ctx->current_rotation == LV_DISPLAY_ROTATION_270 ? 90 : 180;
+            if (disp_ctx->ppa_rotation_buffer && !ppa_unavailable &&
+                rotate_copy_pixel((uint16_t*)color_map, disp_ctx->ppa_rotation_buffer,
+                                  0, 0, ww - 1, hh - 1, ww, hh, angle) == ESP_OK) {
+                rotated_pixels = disp_ctx->ppa_rotation_buffer;
+            } else {
+                const uint32_t dst_stride = disp_ctx->current_rotation == LV_DISPLAY_ROTATION_180 ?
+                                            w_stride : h_stride;
+                lv_draw_sw_rotate(color_map, disp_ctx->draw_buffs[2], ww, hh, w_stride, dst_stride,
+                                  disp_ctx->current_rotation, cf);
             }
-            color_map = (uint8_t*)disp_ctx->draw_buffs[2];
-            lvgl_port_rotate_area(drv, (lv_area_t*)area);
-            offsetx1 = area->x1;
-            offsetx2 = area->x2;
-            offsety1 = area->y1;
-            offsety2 = area->y2;
+            color_map = rotated_pixels;
+            lv_area_t rotated_area = *area;
+            lvgl_port_rotate_area(drv, &rotated_area);
+            offsetx1 = rotated_area.x1;
+            offsetx2 = rotated_area.x2;
+            offsety1 = rotated_area.y1;
+            offsety2 = rotated_area.y2;
         }
     }
 
@@ -728,21 +774,26 @@ static void lvgl_port_flush_callback(lv_display_t* drv, const lv_area_t* area, u
         _lvgl_port_transform_monochrome(drv, area, &color_map);
     }
 
+    esp_err_t transfer_result = ESP_OK;
     if ((disp_ctx->disp_type == LVGL_PORT_DISP_TYPE_RGB || disp_ctx->disp_type == LVGL_PORT_DISP_TYPE_DSI) &&
         (disp_ctx->flags.direct_mode || disp_ctx->flags.full_refresh)) {
         if (lv_disp_flush_is_last(drv)) {
             /* If the interface is I80 or SPI, this step cannot be used for drawing. */
-            esp_lcd_panel_draw_bitmap(disp_ctx->panel_handle, 0, 0, lv_disp_get_hor_res(drv), lv_disp_get_ver_res(drv),
-                                      color_map);
+            transfer_result = esp_lcd_panel_draw_bitmap(disp_ctx->panel_handle, 0, 0, lv_disp_get_hor_res(drv),
+                                                        lv_disp_get_ver_res(drv), color_map);
             /* Waiting for the last frame buffer to complete transmission */
             // xSemaphoreTake(disp_ctx->trans_sem, 0);
             // xSemaphoreTake(disp_ctx->trans_sem, portMAX_DELAY);
         }
     } else {
-        esp_lcd_panel_draw_bitmap(disp_ctx->panel_handle, offsetx1, offsety1, offsetx2 + 1, offsety2 + 1, color_map);
+        transfer_result = esp_lcd_panel_draw_bitmap(disp_ctx->panel_handle, offsetx1, offsety1, offsetx2 + 1,
+                                                    offsety2 + 1, color_map);
     }
 
-    if (disp_ctx->disp_type == LVGL_PORT_DISP_TYPE_RGB ||
+    if (transfer_result != ESP_OK) ESP_LOGE(TAG, "Display transfer failed: %s", esp_err_to_name(transfer_result));
+    // A rejected transfer has no completion callback; never leave LVGL waiting
+    // for an operation that was not submitted.
+    if (transfer_result != ESP_OK || disp_ctx->disp_type == LVGL_PORT_DISP_TYPE_RGB ||
         (disp_ctx->disp_type == LVGL_PORT_DISP_TYPE_DSI &&
          (disp_ctx->flags.direct_mode || disp_ctx->flags.full_refresh))) {
         lv_disp_flush_ready(drv);

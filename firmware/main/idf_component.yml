@@ -1,5 +1,6 @@
 dependencies:
-  espressif/bmi270_sensor: "^0.4.0"
+  m5stack/m5unified: "=0.2.25"
+  m5stack/m5gfx: "=0.2.32"
   # Capa de API Wi-Fi para chips anfitriones sin radio propia.
   espressif/esp_wifi_remote: "=0.5.1"
   # El ESP32-P4 no tiene radio. Esta version coincide con la generacion 1.4.x

@@ -12,6 +12,9 @@ idf_component_register(
         "connectivity.cpp"
         "dictation.cpp"
         "hardware.cpp"
+        "home_scene.cpp"
+        "home_renderer.cpp"
+        "m5_platform.cpp"
         "model.cpp"
         "repository.cpp"
         "services.cpp"
@@ -26,7 +29,7 @@ idf_component_register(
         "fonts/font_rajdhani_64.c"
         "fonts/font_rajdhani_128.c"
     INCLUDE_DIRS "." "assets"
-    REQUIRES m5stack_tab5 esp_timer json nvs_flash spiffs espressif__bmi270_sensor
+    REQUIRES m5stack_tab5 esp_timer json nvs_flash spiffs m5stack__m5unified m5stack__m5gfx
              esp_event esp_http_client esp_netif esp_wifi espressif__esp_hosted espressif__esp_wifi_remote heap
              espressif__mdns bt
     PRIV_REQUIRES unity
@@ -34,6 +37,13 @@ idf_component_register(
 )
 
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-missing-field-initializers)
+
+# M5GFX shares the native IDF I2C controller. Serialize its register-level
+# transactions with the synchronous IDF calls used by touch, RTC and codecs.
+target_link_options(${COMPONENT_LIB} INTERFACE
+    "-Wl,--wrap=i2c_master_transmit" "-Wl,--wrap=i2c_master_receive"
+    "-Wl,--wrap=i2c_master_transmit_receive" "-Wl,--wrap=i2c_master_probe"
+    "-Wl,--wrap=i2c_master_multi_buffer_transmit")
 
 if(EL_SISTEMA_TESTS)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE EL_SISTEMA_RUN_TESTS=1)
