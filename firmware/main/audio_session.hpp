@@ -16,6 +16,8 @@ enum class AudioSessionOwner : uint8_t {
     AssistantPlayback,
     Reminder,
     Diagnostic,
+    Radar,
+    Tetris,
 };
 
 const char* audio_session_owner_name(AudioSessionOwner owner);
@@ -26,9 +28,17 @@ public:
     void release(AudioSessionOwner owner);
     AudioSessionOwner owner() const { return owner_.load(); }
     bool busy() const { return owner() != AudioSessionOwner::None; }
+    void cancel_radar() { radar_cancel_.store(true); }
+    const std::atomic<bool>& radar_cancel_requested() const { return radar_cancel_; }
+    void cancel_tetris() { tetris_cancel_.store(true); }
+    const std::atomic<bool>& tetris_cancel_requested() const { return tetris_cancel_; }
 
 private:
+    friend class AudioSessionLease;
+    std::atomic<unsigned> priority_waiters_ {0};
     std::atomic<AudioSessionOwner> owner_ {AudioSessionOwner::None};
+    std::atomic<bool> radar_cancel_ {false};
+    std::atomic<bool> tetris_cancel_ {false};
 };
 
 class AudioSessionLease {

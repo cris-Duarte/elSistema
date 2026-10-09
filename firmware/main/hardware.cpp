@@ -211,7 +211,7 @@ bool OrientationService::init(i2c_master_bus_handle_t bus)
         ESP_LOGW(TAG, "No se pudo crear la tarea de movimiento BMI270");
         return false;
     }
-    ESP_LOGI(TAG, "BMI270 M5Unified listo: ±8 g, muestras 50 Hz, giroscopio solo en Inicio");
+    ESP_LOGI(TAG, "BMI270 M5Unified listo: ±8 g, muestras 50 Hz en Inicio y reloj de arena");
     return true;
 }
 
@@ -242,7 +242,7 @@ void OrientationService::run()
     OrientationDetector detector(current_rotation_.load());
     TickType_t wake = xTaskGetTickCount();
     while (true) {
-        const bool should_enable_gyro = home_motion_enabled_.load(std::memory_order_relaxed);
+        const bool should_enable_gyro = motion_enabled_.load(std::memory_order_relaxed);
         const int64_t loop_now_us = esp_timer_get_time();
         const bool gyro_retry_due = last_gyro_toggle_attempt_us == 0 ||
                                     loop_now_us - last_gyro_toggle_attempt_us >= 1000000;
@@ -303,7 +303,7 @@ void OrientationService::run()
             ESP_LOGW(TAG, "Muestras BMI270 caducadas; orientación conservada");
             motion_stale = true;
         }
-        vTaskDelayUntil(&wake, pdMS_TO_TICKS(home_motion_enabled_.load() ? HOME_FRAME_MS : 40));
+        vTaskDelayUntil(&wake, pdMS_TO_TICKS(motion_enabled_.load() ? HOME_FRAME_MS : 40));
     }
 }
 

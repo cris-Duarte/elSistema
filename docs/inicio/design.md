@@ -35,9 +35,15 @@ Se usan Rajdhani para títulos/cifras y Poppins para texto de apoyo.
 - Hora local `HH:MM` y fecha `DD/MM/AAAA` en primer plano.
 - Wi‑Fi y batería en la barra superior; el Wi-Fi abre conectividad con un área
   táctil de al menos 48 px.
-- Iconos de aplicación de 96×96 px, con nombre debajo y zona táctil de
-  152×148 px. Productividad usa una lista; Asistente, una cara de robot.
-- Rejilla centrada extensible, hasta cuatro módulos por fila. No mostrar las
+- Iconos de aplicación de 58×58 px, con nombre debajo y zona táctil de
+  152×110 px. Productividad usa una lista; Asistente, una cara de robot;
+  Reloj de arena, un reloj sobre fondo dorado.
+  Radar añade un icono circular verde con cuadrícula y punto.
+  Tetris añade bloques pixelados sobre violeta.
+  Laberinto añade pasillos y una bola sobre ámbar. Con seis módulos hay
+  dos filas de tres en vertical y una de cinco más una centrada en horizontal.
+- Rejilla extensible con filas centradas: hasta cinco módulos por fila en
+  horizontal y tres en vertical. No mostrar las
   antiguas tarjetas grandes, descripciones ni números de módulo.
 - Fondo animado continuo de borde a borde, detrás de reloj, estado y módulos,
   tanto en horizontal como en vertical. No usar un contenedor de arena.
@@ -81,7 +87,8 @@ medición de la frecuencia física del panel.
 - M5Unified `0.2.25` inicializa la placa y es el propietario del IMU; el servicio
   de movimiento lee `M5.Imu.getAccel()` en g y publica muestras a la interfaz.
 - BMI270 a 100 Hz, acelerómetro ±8 g y giroscopio ±2000 °/s; muestras de servicio
-  a 50 Hz en Inicio. El giroscopio se apaga al salir; la orientación automática
+  a 50 Hz en Inicio, Reloj de arena y Laberinto. El giroscopio se apaga al salir
+  de estas vistas; la orientación automática
   sigue disponible para los módulos.
 - Se descartan solo en RAM los offsets cargados por M5 al cambiar el rango,
   evitando mezclar calibraciones de otra escala; no se borran claves de NVS.

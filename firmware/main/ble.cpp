@@ -114,7 +114,8 @@ bool BleService::init()
 {
     if (initialized_) return true;
     if (mutex_ == nullptr) mutex_ = xSemaphoreCreateMutex();
-    if (mutex_ == nullptr) return false;
+    if (observations_ == nullptr) observations_ = xQueueCreate(64, sizeof(BleObservationReport));
+    if (mutex_ == nullptr || observations_ == nullptr) return false;
     set_state(BlePhase::Starting, "Iniciando NimBLE sobre el ESP32-C6");
     instance_ = this;
 
@@ -150,6 +151,7 @@ void BleService::host_task(void*)
 
 void BleService::on_reset(int reason)
 {
+    if (instance_) instance_->synced_.store(false);
     ESP_LOGE(TAG, "NimBLE se reinició: %d", reason);
     if (instance_ != nullptr)
         instance_->set_state(BlePhase::Error, "Bluetooth perdió la conexión con el C6",
@@ -164,7 +166,52 @@ void BleService::on_sync()
         instance_->set_state(BlePhase::Error, "No se pudo obtener la identidad BLE");
         return;
     }
+    instance_->synced_.store(true);
     instance_->advertise();
+}
+
+bool BleService::observe(uint32_t session, std::string& error)
+{
+    const uint32_t previous = observation_session_.load();
+    if (!session) {
+        observation_session_.store(0);
+        if (synced_.load() && ble_gap_disc_active()) ble_gap_disc_cancel();
+        if (observations_) xQueueReset(observations_);
+        error.clear(); return true;
+    }
+    if (!synced_.load()) { error = "Esperando enlace BLE con el C6"; return false; }
+    if (previous == session && ble_gap_disc_active()) { error.clear(); return true; }
+    observation_session_.store(0);
+    if (ble_gap_disc_active()) ble_gap_disc_cancel();
+    if (observations_) xQueueReset(observations_);
+    observation_session_.store(session);
+    ble_gap_disc_params parameters {};
+    parameters.itvl = 160; // 100 ms, units 0.625 ms
+    parameters.window = 48; // 30 ms
+    parameters.passive = 0;
+    parameters.filter_duplicates = 0; // RSSI needs repeated reports.
+    const int rc = ble_gap_disc(address_type_, BLE_HS_FOREVER, &parameters, observation_event,
+                               reinterpret_cast<void*>(static_cast<uintptr_t>(session)));
+    if (rc) { observation_session_.store(0); error = "Escaneo BLE pospuesto: " + std::to_string(rc); return false; }
+    error.clear(); return true;
+}
+bool BleService::read_observation(BleObservationReport& report)
+{ return observations_ && xQueueReceive(observations_, &report, 0) == pdTRUE; }
+int BleService::observation_event(ble_gap_event* event, void* argument)
+{
+    auto* service = instance_;
+    if (!service || event->type != BLE_GAP_EVENT_DISC) return 0;
+    BleObservationReport report;
+    report.session = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(argument));
+    if (!report.session || report.session != service->observation_session_.load()) return 0;
+    std::copy_n(event->disc.addr.val, 6, report.address.begin());
+    std::reverse(report.address.begin(), report.address.end());
+    report.address_type = event->disc.addr.type;
+    report.rssi = event->disc.rssi;
+    report.length = std::min<size_t>(event->disc.length_data, report.data.size());
+    std::copy_n(event->disc.data, report.length, report.data.begin());
+    if (xQueueSend(service->observations_, &report, 0) != pdTRUE) ++service->dropped_reports_;
+    return 0;
 }
 
 bool BleService::advertise()

@@ -37,7 +37,7 @@ public:
     bool init(i2c_master_bus_handle_t bus);
     int poll();
     void set_current(int rotation) { current_rotation_.store(rotation, std::memory_order_relaxed); }
-    void set_home_motion_enabled(bool enabled) { home_motion_enabled_.store(enabled, std::memory_order_relaxed); }
+    void set_motion_enabled(bool enabled) { motion_enabled_.store(enabled, std::memory_order_relaxed); }
     MotionSample motion_snapshot() const;
     bool available() const { return sensor_ != nullptr; }
 
@@ -51,7 +51,7 @@ private:
     std::atomic<int> current_rotation_{1};
     // Stable detected state survives UI locks; it is not a one-shot event.
     std::atomic<int> detected_rotation_{1};
-    std::atomic<bool> home_motion_enabled_{false};
+    std::atomic<bool> motion_enabled_{false};
     std::atomic<bool> gyro_available_{false};
 };
 

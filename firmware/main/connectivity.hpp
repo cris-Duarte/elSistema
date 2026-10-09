@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include "radar_model.hpp"
 
 #include "esp_event.h"
 #include "esp_netif.h"
@@ -128,6 +129,9 @@ public:
     bool hosted_ready() const { return wifi_driver_ready_.load(); }
 
     bool scan();
+    // Called only by the existing network worker. Does not change connection
+    // state or persist detections, and retains BSSID/channel/hidden records.
+    bool scan_observations(std::vector<RadarObservation>& observations, std::string& error);
     bool auto_connect(bool user_requested = false);
     bool connect_and_save(const NetworkCredentials& credentials);
     bool connect_known(size_t index);

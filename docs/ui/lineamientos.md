@@ -40,11 +40,27 @@ estilo RPG. Ya existen código, pantallas y componentes implementados.
 
 ## 3. Filosofía de diseño
 
-El Sistema usa dos contextos visuales intencionales. **Inicio** es el espacio de
+El Sistema usa contextos visuales intencionales. **Inicio** es el espacio de
 entrada: negro, lúdico, táctil y con partículas de luz. **Productividad y
 Asistente** conservan el HUD oscuro de fantasía/RPG que ya tienen. No se debe
 forzar una paleta única entre Inicio y los módulos: la coherencia se mantiene en
 tipografía, escala táctil, claridad, ritmo y calidad de ejecución.
+
+**Reloj de arena** añade un contexto inmersivo negro, con cristal y arena de
+luz dorada; sus controles usan los componentes compartidos. El dorado representa
+material en ese módulo, no XP. Su sesión oculta la barra de estado y bloquea
+el panel vertical para que la rotación física cambie únicamente la arena.
+
+**Radar** usa un instrumento circular verde sobre negro, con señales Wi-Fi
+amarillas y BLE cian. Estos colores identifican tipos de radio, no XP. Su
+barrido es una excepción decorativa explícita: nunca inventa mediciones y
+siempre muestra `INTENSIDAD · NO UBICACIÓN`. Comparte tipografía, controles
+táctiles y navegación; admite las cuatro orientaciones de la interfaz.
+
+**Tetris** tiene identidad arcade de 8 bits: fondo negro, bloques de siete
+colores y tipografía pixelada original. Juega en vertical fija, oculta la barra
+global y vuelve a Inicio desde pausa. Sus colores no representan XP ni rangos.
+Guía propia en `docs/tetris/design.md`.
 
 - **Claridad antes que decoración.** El neón y el estilo HUD son acento, nunca
   ruido que degrade la legibilidad.
@@ -126,8 +142,8 @@ no al relleno de superficies ni al texto corrido.
 - **Ventana del Sistema (módulos):** diálogos y notificaciones con marco
   característico y encabezado tipo `[ SISTEMA ]` / `⚠ ALERTA`. Un solo estilo
   dentro de los módulos.
-- **Iconos de Inicio:** pictograma simple de 96×96 px con nombre debajo y zona
-  táctil amplia de 152×148 px; no son paneles HUD ni tarjetas descriptivas.
+- **Iconos de Inicio:** pictograma simple de 58×58 px con nombre debajo y zona
+  táctil amplia de 152×110 px; no son paneles HUD ni tarjetas descriptivas.
 - **Barras de progreso (XP, nivel):** delgadas, con pulso de luz al llenarse.
   Feedback visible al ganar XP.
 - **Elementos RPG (nivel, rango E–S, stats):** misma jerarquía tipográfica que el

@@ -12,13 +12,32 @@ idf_component_register(
         "connectivity.cpp"
         "dictation.cpp"
         "hardware.cpp"
+        "hourglass.cpp"
+        "hourglass_model.cpp"
+        "hourglass_repository.cpp"
+        "hourglass_raster.cpp"
+        "hourglass_renderer.cpp"
         "home_scene.cpp"
         "home_renderer.cpp"
         "m5_platform.cpp"
+        "maze.cpp"
+        "maze_model.cpp"
+        "maze_renderer.cpp"
         "model.cpp"
         "repository.cpp"
+        "radar.cpp"
+        "radar_model.cpp"
+        "radar_raster.cpp"
+        "radar_renderer.cpp"
         "services.cpp"
         "transcription.cpp"
+        "tetris.cpp"
+        "tetris_model.cpp"
+        "tetris_repository.cpp"
+        "tetris_renderer.cpp"
+        "tetris_sound.cpp"
+        "ui_tetris.cpp"
+        "ui_maze.cpp"
         "ui.cpp"
         "assets/assistant_character.c"
         "assets/assistant_character_data.c"
@@ -47,4 +66,7 @@ target_link_options(${COMPONENT_LIB} INTERFACE
 
 if(EL_SISTEMA_TESTS)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE EL_SISTEMA_RUN_TESTS=1)
+    if(EL_SISTEMA_RADAR_SMOKE)
+        target_compile_definitions(${COMPONENT_LIB} PRIVATE EL_SISTEMA_RADAR_SMOKE=1)
+    endif()
 endif()

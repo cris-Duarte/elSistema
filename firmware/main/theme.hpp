@@ -46,6 +46,14 @@ constexpr uint32_t HomeParticleLime = 0xFFE6AD; // luz cálida, no verde neón
 constexpr uint32_t HomeParticleRose = 0xFFD0E8;
 constexpr uint32_t HomeParticleLavender = 0xD9D0FF;
 
+// Reloj de arena: material luminoso dorado, contexto independiente del HUD.
+constexpr uint32_t HourglassGold = 0xFFD279;
+constexpr uint32_t HourglassAmber = 0xDB922C;
+constexpr uint32_t HourglassCore = 0xFFF5D5;
+constexpr uint32_t HourglassGlass = 0x596676;
+constexpr uint32_t HourglassReflection = 0xBBC8D8;
+constexpr uint32_t HourglassFrame = 0x9F753C;
+
 // --- Texto ---
 constexpr uint32_t TextPrimary = 0xE8F2FF;
 constexpr uint32_t TextSecondary = 0x7A8CA3;

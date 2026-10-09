@@ -2,9 +2,12 @@
 
 #include <cstdint>
 #include <string>
+#include <array>
+#include <atomic>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/queue.h"
 
 struct ble_gap_event;
 struct ble_gatt_access_ctxt;
@@ -29,6 +32,14 @@ struct BleSnapshot {
     uint32_t minimum_internal_bytes = 0;
     bool connected = false;
 };
+struct BleObservationReport {
+    uint32_t session = 0;
+    std::array<uint8_t, 6> address {};
+    uint8_t address_type = 0;
+    int8_t rssi = -127;
+    uint8_t length = 0;
+    std::array<uint8_t, 64> data {};
+};
 
 const char* ble_phase_name(BlePhase phase);
 
@@ -39,6 +50,10 @@ class BleService {
 public:
     bool init();
     BleSnapshot snapshot() const;
+    bool observe(uint32_t session, std::string& error);
+    bool read_observation(BleObservationReport& report);
+    uint32_t dropped_reports() const { return dropped_reports_.load(); }
+    bool observation_active() const { return observation_session_.load() != 0; }
 
 private:
     static void host_task(void* argument);
@@ -47,6 +62,7 @@ private:
     static int gap_event(ble_gap_event* event, void* argument);
     static int gatt_access(uint16_t connection_handle, uint16_t attribute_handle,
                            ble_gatt_access_ctxt* context, void* argument);
+    static int observation_event(ble_gap_event* event, void* argument);
 
     bool register_gatt();
     bool advertise();
@@ -58,6 +74,9 @@ private:
     BleSnapshot snapshot_;
     bool initialized_ = false;
     uint8_t address_type_ = 0;
+    QueueHandle_t observations_ = nullptr;
+    std::atomic<bool> synced_ {false};
+    std::atomic<uint32_t> observation_session_ {0}, dropped_reports_ {0};
 };
 
 }  // namespace el_sistema

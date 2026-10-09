@@ -7,6 +7,25 @@ sigue funcionando con teclado.
 
 ## Funciones incluidas
 
+- Módulo **LABERINTO**: bola controlada por inclinación, tres mapas originales,
+  agujeros, meta, calibración, pausa y récords locales. Vertical fija y silencioso.
+  Documentación y pruebas en [docs/laberinto/README.md](../docs/laberinto/README.md).
+
+- Módulo **TETRIS**: tablero retro 12×20 con cuadrados de 60 px, gestos, próxima pieza, niveles,
+  puntuación/récord, partida recuperable en NVS, efectos y música originales.
+  Vertical fija, pausa ante recordatorios y audio de baja prioridad.
+  Las partidas anteriores conservan sus 10 columnas al continuar.
+  Documentación y pruebas en [docs/tetris/README.md](../docs/tetris/README.md).
+
+- Módulo **RADAR**: exploración Wi-Fi 2,4 GHz / Bluetooth LE, seguimiento por
+  RSSI, gráfica de 60 s y pitidos opcionales. No representa ubicaciones reales.
+  Documentación y pruebas en [docs/radar/README.md](../docs/radar/README.md).
+
+- Módulo independiente **RELOJ DE ARENA**: configuración de 1–120 minutos,
+  arena de luz dorada con flujo reversible por IMU, panel vertical bloqueado,
+  cronómetro transcurrido, controles por toque y checkpoints propios en NVS.
+  Descripción y pruebas en [docs/reloj-arena/README.md](../docs/reloj-arena/README.md).
+
 - Creación y edición de misiones con teclado táctil español, descripción,
   rango E–S y recordatorio configurable.
 - Zona de Enfoque ordenable, un único cronómetro activo e historial de
@@ -22,7 +41,7 @@ sigue funcionando con teclado.
 - RTC RX8130CE con configuración inicial por ruedas deslizables (día, mes, año,
   hora y minuto, sin teclado), y rotación automática con BMI270 después de
   800 ms de orientación estable.
-- Barra superior de estado (siempre visible): reloj local, control táctil de
+- Barra superior de estado (oculta en módulos inmersivos): reloj local, control táctil de
   conectividad de 44 px con estados `BUSCANDO RED`, `CONECTANDO`, SSID,
   `BUSCANDO MAC`, `LISTO` o `SIN CONEXIÓN`, y energía (`USB · BAT %`
   cargando, `BAT %` con batería, `USB` solo sin batería instalada). El

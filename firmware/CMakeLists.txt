@@ -8,6 +8,7 @@ set(ENV{ESP_IDF_VERSION} "5.4")
 # Con -DEL_SISTEMA_TESTS=ON se compila el componente de pruebas de dominio y el
 # firmware las ejecuta al arrancar, antes de tocar hardware o almacenamiento.
 option(EL_SISTEMA_TESTS "Compilar y ejecutar las pruebas de dominio al arrancar" OFF)
+option(EL_SISTEMA_RADAR_SMOKE "Abrir Radar y verificar escaneo real; solo con TESTS" OFF)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 

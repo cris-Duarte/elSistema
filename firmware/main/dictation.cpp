@@ -192,7 +192,43 @@ void DictationService::run()
         CommandMessage command;
         if (xQueueReceive(commands_, &command, pdMS_TO_TICKS(250)) == pdTRUE) handle(command);
         connectivity_.maintain();
+        // Connection/reconnection and explicit commands take precedence. A
+        // single coalesced request prevents a scan backlog during dictation.
+        if (uxQueueMessagesWaiting(commands_) == 0) {
+            const uint32_t session = radar_requested_.exchange(0);
+            if (session && session == radar_session_.load()) {
+                RadarWifiBatch batch;
+                batch.session = session;
+                connectivity_.scan_observations(batch.observations, batch.error);
+                if (session == radar_session_.load() && xSemaphoreTake(mutex_, portMAX_DELAY) == pdTRUE) {
+                    batch.generation = radar_batch_.generation + 1;
+                    radar_batch_ = std::move(batch);
+                    xSemaphoreGive(mutex_);
+                }
+            }
+        }
     }
+}
+
+void DictationService::radar_session(uint32_t session)
+{
+    radar_session_.store(session);
+    radar_requested_.store(0);
+}
+bool DictationService::request_radar_scan(uint32_t session)
+{
+    if (!session || session != radar_session_.load()) return false;
+    uint32_t empty = 0;
+    return radar_requested_.compare_exchange_strong(empty, session);
+}
+RadarWifiBatch DictationService::radar_wifi_batch(uint32_t after_generation) const
+{
+    RadarWifiBatch result;
+    if (mutex_ && xSemaphoreTake(mutex_, pdMS_TO_TICKS(5)) == pdTRUE) {
+        if (radar_batch_.generation != after_generation) result = radar_batch_;
+        xSemaphoreGive(mutex_);
+    }
+    return result;
 }
 
 void DictationService::handle(const CommandMessage& message)
