@@ -2,7 +2,6 @@
 
 #include "assets/assistant_character.h"
 #include "fonts/fonts.h"
-#include "radar_layout.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -279,10 +278,10 @@ constexpr int kStatusBarHeight = 48;
 AppUi::AppUi(AppState& state, ApplicationService& service, MissionRepository& repository, ClockService& clock,
              OrientationService& orientation, ButtonService& button, DictationService& dictation,
              PowerService& power, AssistantService& assistant, AssistantVoiceService& assistant_voice,
-             HourglassService& hourglass, RadarService& radar, TetrisService& tetris, MazeService& maze)
+             TetrisService& tetris, HabitService& habits)
     : state_(state), service_(service), repository_(repository), clock_(clock), orientation_(orientation),
       button_(button), dictation_(dictation), power_(power), assistant_(assistant), assistant_voice_(assistant_voice),
-      hourglass_(hourglass), radar_(radar), tetris_(tetris), maze_(maze)
+      tetris_(tetris), habits_(habits)
 {
 }
 
@@ -307,7 +306,6 @@ void AppUi::action_callback(lv_event_t* event)
 {
     auto* action = static_cast<Action*>(lv_event_get_user_data(event));
     if (action != nullptr && action->ui != nullptr) {
-        if (action->ui->view_ == View::Hourglass) action->ui->hourglass_controls_since_us_ = esp_timer_get_time();
         action->ui->dispatch(*action);
     }
 }
@@ -322,12 +320,6 @@ void AppUi::home_animation_callback(lv_timer_t* timer)
 {
     auto* ui = static_cast<AppUi*>(lv_timer_get_user_data(timer));
     if (ui != nullptr) ui->update_home_animation();
-}
-
-void AppUi::hourglass_animation_callback(lv_timer_t* timer)
-{
-    auto* ui = static_cast<AppUi*>(lv_timer_get_user_data(timer));
-    if (ui != nullptr) ui->update_hourglass();
 }
 
 void AppUi::home_touch_callback(lv_event_t* event)
@@ -413,30 +405,21 @@ lv_obj_t* AppUi::panel(lv_obj_t* parent, int x, int y, int width, int height, bo
 void AppUi::render()
 {
     if (screen_ == nullptr) return;
+    if(habit_list_)habit_list_scroll_=lv_obj_get_scroll_y(habit_list_);
+    if(habit_detail_)habit_detail_scroll_=lv_obj_get_scroll_y(habit_detail_);
+    habits_.allow_audio(!habit_critical() && view_!=View::Editor && view_!=View::SearchEditor &&
+                        view_!=View::ClockSetup && view_!=View::DictationSetup && overlay_==Overlay::None &&
+                        !dictation_.busy() && !assistant_voice_.busy());
     tetris_.set_visible(view_ == View::Tetris && !screen_off_);
-    maze_.set_visible(view_ == View::Maze && !screen_off_);
-    if (maze_timer_) { lv_timer_delete(maze_timer_); maze_timer_=nullptr; }
     tetris_gesture_.cancel();
     tetris_.soft_drop(false);
     if (tetris_timer_) { lv_timer_delete(tetris_timer_); tetris_timer_ = nullptr; }
-    const bool radar_visible = view_ == View::Radar && !screen_off_;
-    if (radar_visible_ != radar_visible && radar_.visible(radar_visible)) radar_visible_ = radar_visible;
-    if (radar_animation_timer_) { lv_timer_delete(radar_animation_timer_); radar_animation_timer_ = nullptr; }
     const bool should_run_home_motion = view_ == View::Home && !screen_off_;
-    const bool hourglass_view = view_ == View::Hourglass || view_ == View::HourglassSetup;
-    const bool should_run_motion = (view_ == View::Home || hourglass_view || view_ == View::Maze) && !screen_off_;
-    const bool should_run_hourglass = hourglass_view && !screen_off_;
-    if (hourglass_visible_ != should_run_hourglass) {
-        if (hourglass_.set_visible(should_run_hourglass)) hourglass_visible_ = should_run_hourglass;
-    }
+    const bool should_run_motion = should_run_home_motion;
     cancel_home_rotation(); // No animation may retain objects being deleted.
     if (home_animation_timer_ != nullptr) {
         lv_timer_delete(home_animation_timer_);
         home_animation_timer_ = nullptr;
-    }
-    if (hourglass_animation_timer_ != nullptr) {
-        lv_timer_delete(hourglass_animation_timer_);
-        hourglass_animation_timer_ = nullptr;
     }
     if (should_run_motion != home_motion_enabled_) {
         home_motion_enabled_ = should_run_motion;
@@ -447,27 +430,21 @@ void AppUi::render()
     home_date_label_ = nullptr;
     home_header_group_ = nullptr;
     home_modules_group_ = nullptr;
-    hourglass_time_label_ = nullptr;
-    hourglass_controls_ = nullptr;
-    hourglass_primary_ = nullptr;
-    hourglass_error_label_ = nullptr;
-    hourglass_duration_roller_ = nullptr;
-    hourglass_last_frame_ = hourglass_last_generation_ = UINT32_MAX;
-    hourglass_last_time_.clear();
-    hourglass_last_error_.clear();
     lv_obj_clean(screen_);
-    maze_renderer_.reset();maze_status_=nullptr;
+    habit_calendar_.reset();
     tetris_renderer_.reset();
     tetris_score_ = tetris_level_ = tetris_record_ = tetris_notice_ = nullptr;
     tetris_preview_.fill(nullptr);
     tetris_preview_kind_ = 255;
     // Delete the image object before freeing either of its RAM canvases.
     home_renderer_.reset();
-    hourglass_renderer_.reset();
-    radar_renderer_.reset();
-    lv_timer_set_period(lv_display_get_refr_timer(display_), should_run_home_motion ? HOME_FRAME_MS :
-                        hourglass_view || radar_visible ? 30 : 33);
+    lv_timer_set_period(lv_display_get_refr_timer(display_), should_run_home_motion ? HOME_FRAME_MS : 33);
     actions_.clear();
+    habit_textareas_.fill(nullptr);
+    habit_counters_.clear();
+    habit_best_=habit_banner_=habit_pending_indicator_=habit_error_label_=nullptr;
+    habit_form_=nullptr;
+    habit_list_=habit_detail_=nullptr;
     reminder_labels_.clear();
     timer_label_ = nullptr;
     active_status_label_ = nullptr;
@@ -500,7 +477,7 @@ void AppUi::render()
     assistant_level_bar_ = nullptr;
 
     const bool home = view_ == View::Home && !screen_off_;
-    lv_obj_set_style_bg_color(screen_, color(home || hourglass_view || view_ == View::Radar || view_ == View::Tetris || view_ == View::Maze ? theme::HomeBackground : BG), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(screen_, color(habit_view() ? theme::HabitPaper : home || view_ == View::Tetris ? theme::HomeBackground : BG), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(screen_, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_text_font(screen_, &FONT_BODY, LV_PART_MAIN);
 
@@ -515,11 +492,7 @@ void AppUi::render()
 
     switch (view_) {
         case View::Home: render_home(); break;
-        case View::Radar: render_radar(); break;
         case View::Tetris: render_tetris(); break;
-        case View::Maze: render_maze(); break;
-        case View::HourglassSetup: render_hourglass_setup(); break;
-        case View::Hourglass: render_hourglass(); break;
         case View::Dashboard: render_dashboard(); break;
         case View::Assistant: render_assistant(); break;
         case View::History: render_history(); break;
@@ -527,15 +500,16 @@ void AppUi::render()
         case View::SearchEditor: render_editor(true); break;
         case View::ClockSetup: render_clock_setup(); break;
         case View::DictationSetup: render_dictation_setup(); break;
+        case View::Habits: case View::HabitDetail: render_habits(); break;
+        case View::HabitEditor: render_habit_editor(); break;
+        case View::HabitPeriod: render_habit_period(); break;
+        case View::HabitSettings: render_habit_settings(); break;
+        case View::HabitAlerts: render_habit_alerts(); break;
     }
     if (overlay_ != Overlay::None) render_overlay();
     // La barra va la última para que ningún panel ni diálogo la tape.
-    // Radar uses the full short axis; its radio status and navigation live in
-    // the side/bottom controls rather than overlaying the edge-to-edge disk.
-    if (view_ != View::Hourglass && view_ != View::Radar && view_ != View::Tetris && view_ != View::Maze) render_statusbar();
-    if (hourglass_view) {
-        hourglass_animation_timer_ = lv_timer_create(hourglass_animation_callback, 30, this);
-    }
+    if (view_ != View::Tetris) render_statusbar();
+    render_habit_banner();
     if (home_rotation_pending_ && view_ == View::Home && overlay_ == Overlay::None && !screen_off_) {
         start_home_rotation();
     } else {
@@ -662,6 +636,12 @@ void AppUi::render_statusbar()
             lv_obj_set_style_bg_opa(text, LV_OPA_90, LV_PART_MAIN);
         }
     }
+    if (habit_view()) {
+        lv_obj_set_style_bg_color(bar,color(theme::HabitSheet),0);
+        lv_obj_set_style_border_color(bar,color(theme::HabitInk),0);
+        for(auto* text:{status_clock_label_,status_net_label_,status_power_label_})
+            if(text) lv_obj_set_style_text_color(text,color(theme::HabitInk),0);
+    }
 }
 
 void AppUi::render_home()
@@ -743,10 +723,8 @@ void AppUi::render_home()
         const int x = (module_columns - row_count) * (module_cell_width + 12) / 2 +
                       (static_cast<int>(index) % module_columns) * (module_cell_width + 12);
         const uint32_t accent = module.id == ModuleId::Productivity ? theme::HomeBlue :
-                                module.id == ModuleId::Hourglass ? theme::HourglassGold :
-                                module.id == ModuleId::Radar ? 0x21D783 :
-                                module.id == ModuleId::Tetris ? 0xB979FF :
-                                module.id == ModuleId::Maze ? 0xE4AA60 : theme::HomeCanary;
+                                module.id == ModuleId::Habits ? 0x68B78C :
+                                module.id == ModuleId::Tetris ? 0xB979FF : theme::HomeCanary;
 
         lv_obj_t* cell = lv_button_create(home_modules_group_);
         place(cell, x, row * (module_cell_height + 12), module_cell_width, module_cell_height);
@@ -802,6 +780,11 @@ void AppUi::render_home()
             shape(23, 37, 12, 2, true, 1);
             shape(28, 9, 2, 8, true, 0);
             shape(25, 5, 8, 8, true, LV_RADIUS_CIRCLE);
+        } else if (module.id == ModuleId::Habits) {
+            shape(12,14,34,33,false,2);
+            shape(19,9,3,10,true,0); shape(36,9,3,10,true,0);
+            for(int row=0;row<2;++row) for(int col=0;col<3;++col)
+                shape(18+col*9,26+row*9,5,5,true,0);
         } else if (module.id == ModuleId::Tetris) {
             shape(14, 14, 9, 9, true, 0);
             shape(24, 14, 9, 9, true, 0);
@@ -810,28 +793,6 @@ void AppUi::render_home()
             shape(14, 36, 9, 9, true, 0);
             shape(24, 36, 9, 9, true, 0);
             shape(34, 36, 9, 9, true, 0);
-        } else if (module.id == ModuleId::Maze) {
-            shape(10,10,38,38,false,2);
-            shape(20,11,3,24,true,0);
-            shape(32,24,15,3,true,0);
-            shape(23,34,14,3,true,0);
-            shape(38,38,7,7,true,LV_RADIUS_CIRCLE);
-        } else if (module.id == ModuleId::Radar) {
-            shape(9, 9, 40, 40, false, LV_RADIUS_CIRCLE);
-            shape(19, 19, 20, 20, false, LV_RADIUS_CIRCLE);
-            shape(28, 10, 2, 38, true, 0);
-            shape(10, 28, 38, 2, true, 0);
-            shape(37, 16, 6, 6, true, LV_RADIUS_CIRCLE);
-        } else {
-            shape(13, 9, 32, 3, true, 0);
-            shape(13, 46, 32, 3, true, 0);
-            for (int row = 0; row < 34; ++row) {
-                const int half = 3 + std::abs(row - 17) * 11 / 17;
-                shape(29 - half, 12 + row, 2, 1, true, 0);
-                shape(29 + half - 1, 12 + row, 2, 1, true, 0);
-            }
-            shape(26, 20, 6, 7, true, 1);
-            shape(24, 39, 10, 5, true, 1);
         }
         lv_obj_t* name = label(cell, module.name, &FONT_LABEL, theme::HomeInk);
         lv_obj_set_width(name, module_cell_width);
@@ -867,364 +828,6 @@ void AppUi::update_home_animation()
         home_fps_since_us_ = now;
         home_frame_count_ = 0;
     }
-}
-
-void AppUi::render_radar()
-{
-    const int width = lv_display_get_horizontal_resolution(display_);
-    const auto layout = radar_layout(width, lv_display_get_vertical_resolution(display_));
-    const bool portrait = layout.portrait;
-    const int right_x = layout.controls_x;
-    const int right_w = layout.controls_width;
-    auto* title = label(screen_, "RADAR", &FONT_DISPLAY, 0x7AF5AC);
-    lv_obj_set_pos(title, right_x, layout.title_y);
-    button(screen_, "INICIO", width-160, layout.title_y, 136, 48, ActionCode::GoHome);
-    const char* filters[] = {"TODOS", "WI-FI", "BLE"};
-    const int filter_width = portrait ? 116 : (right_w-16)/3;
-    for (int i = 0; i < 3; ++i)
-        radar_filter_buttons_[i] = button(screen_, filters[i], right_x+i*(filter_width+8), layout.filters_y, filter_width, 48, ActionCode::RadarFilter, 0, i);
-    const int action_width = portrait ? 136 : (right_w-8)/2;
-    const int pause_x = portrait ? 412 : right_x;
-    radar_pause_button_ = button(screen_, "PAUSAR", pause_x, layout.actions_y, action_width, 48, ActionCode::RadarPause);
-    radar_sound_button_ = button(screen_, "SONIDO: NO", pause_x+action_width+(portrait ? 12 : 8), layout.actions_y, action_width, 48, ActionCode::RadarSound);
-    radar_status_ = label(screen_, "Preparando escaneo…", &FONT_BODY, MUTED);
-    place(radar_status_, right_x, layout.status_y, right_w, portrait ? 28 : 48);
-    lv_label_set_long_mode(radar_status_, LV_LABEL_LONG_DOT);
-    radar_size_ = layout.diameter;
-    auto* image = lv_image_create(screen_);
-    lv_obj_set_pos(image, 0, 0);
-    lv_obj_add_flag(image, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(image, radar_touch_callback, LV_EVENT_CLICKED, this);
-    radar_renderer_ = std::make_unique<RadarRenderer>();
-    if (!radar_renderer_->init(image, radar_size_)) {
-        radar_renderer_.reset();
-        auto* failed = label(screen_, "Sin memoria para el radar. La lista sigue disponible.", &FONT_BODY, 0xFFD858);
-        place(failed, 40, radar_size_/2-50, radar_size_-80, 100);
-    }
-    auto* legend = label(screen_, "INTENSIDAD · NO UBICACIÓN\nAmarillo: Wi-Fi  /  Diamante cian: BLE", &FONT_BODY, 0xD9FCE4);
-    place(legend, right_x, layout.legend_y, right_w, 48);
-    auto* details = panel(screen_, right_x, layout.detail_y, right_w, layout.detail_height, true);
-    radar_detail_ = label(details, "Selecciona un punto o una fila para seguir su señal.", &FONT_BODY, TEXT);
-    place(radar_detail_, 12, 10, right_w-242, LV_SIZE_CONTENT);
-    radar_chart_ = lv_chart_create(details);
-    place(radar_chart_, right_w-220, 12, 204, 120);
-    base_style(radar_chart_, 0x071C12, 0x236841);
-    lv_chart_set_type(radar_chart_, LV_CHART_TYPE_LINE);
-    lv_chart_set_range(radar_chart_, LV_CHART_AXIS_PRIMARY_Y, -110, -20);
-    lv_chart_set_point_count(radar_chart_, 61);
-    lv_chart_set_div_line_count(radar_chart_, 4, 4);
-    radar_series_ = lv_chart_add_series(radar_chart_, color(0xFFD858), LV_CHART_AXIS_PRIMARY_Y);
-    auto* graph_caption = label(details, "Últimos 60 s · RSSI", &FONT_BODY, MUTED);
-    lv_obj_set_pos(graph_caption, right_w-218, 142);
-    auto* list = panel(screen_, right_x, layout.list_y, right_w, layout.list_height, true);
-    for (size_t i = 0; i < radar_rows_.size(); ++i) {
-        auto* row = lv_button_create(list);
-        place(row, 6, 6+static_cast<int>(i)*60, right_w-24, 54);
-        base_style(row, 0x0B241A, 0x23513A);
-        radar_row_actions_[i] = make_action(ActionCode::RadarSelect);
-        lv_obj_add_event_cb(row, action_callback, LV_EVENT_CLICKED, radar_row_actions_[i]);
-        auto* caption = label(row, "", &FONT_LABEL, TEXT);
-        lv_obj_set_width(caption, right_w-44); lv_obj_center(caption);
-        lv_label_set_long_mode(caption, LV_LABEL_LONG_DOT);
-        lv_obj_add_flag(row, LV_OBJ_FLAG_HIDDEN);
-        radar_rows_[i] = row;
-    }
-    const int pager_y = layout.pager_y;
-    button(screen_, "ANTERIOR", right_x, pager_y, 138, 48, ActionCode::RadarPage, 0, -1);
-    button(screen_, "SIGUIENTE", right_x+right_w-138, pager_y, 138, 48, ActionCode::RadarPage, 0, 1);
-    radar_page_label_ = label(screen_, "Buscando emisores…", &FONT_BODY, MUTED);
-    place(radar_page_label_, right_x+146, pager_y+5, right_w-292, 42);
-    lv_obj_set_style_text_align(radar_page_label_, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-    radar_next_update_ms_ = 0;
-    radar_fps_since_ms_ = esp_timer_get_time()/1000; radar_frames_ = 0;
-    update_radar();
-    radar_animation_timer_ = lv_timer_create(radar_animation_callback, 30, this);
-}
-
-#ifdef EL_SISTEMA_RADAR_SMOKE
-void AppUi::radar_validation_view(bool open, int rotation)
-{
-    // Test-only caller holds the BSP display lock, exactly like LVGL events.
-    radar_validation_active_ = open;
-    if (open) { open_module(ModuleId::Radar); set_rotation(rotation); }
-    else { radar_.visible(false); radar_visible_ = false; overlay_ = Overlay::None; view_ = View::Home; }
-    schedule_render();
-}
-#endif
-
-void AppUi::radar_animation_callback(lv_timer_t* timer)
-{ static_cast<AppUi*>(lv_timer_get_user_data(timer))->update_radar(); }
-
-void AppUi::radar_touch_callback(lv_event_t* event)
-{
-    auto* ui = static_cast<AppUi*>(lv_event_get_user_data(event));
-    auto* input = lv_indev_active();
-    if (!input || ui->overlay_ != Overlay::None) return;
-    lv_point_t point; lv_indev_get_point(input, &point);
-    lv_area_t area; lv_obj_get_coords(static_cast<lv_obj_t*>(lv_event_get_target(event)), &area);
-    const float radius = ui->radar_size_/2.f-22;
-    ui->radar_hits_ = radar_hit_test(ui->radar_points_, (point.x-area.x1-ui->radar_size_/2.f)/radius,
-                                    (point.y-area.y1-ui->radar_size_/2.f)/radius, 24.f/radius);
-    if (ui->radar_hits_.size() == 1) {
-        ui->radar_.select(ui->radar_hits_.front()); ui->radar_next_update_ms_ = 0;
-    } else if (!ui->radar_hits_.empty()) {
-        ui->overlay_ = Overlay::RadarPick; ui->schedule_render();
-    }
-}
-
-void AppUi::update_radar()
-{
-    if (view_ != View::Radar || screen_off_) return;
-    const int64_t now = esp_timer_get_time()/1000;
-    const auto set_text = [](lv_obj_t* object, const std::string& text) {
-        if (object && text != lv_label_get_text(object)) lv_label_set_text(object, text.c_str());
-    };
-    if (now >= radar_next_update_ms_) {
-        radar_snapshot_ = radar_.snapshot();
-        radar_next_update_ms_ = now+250;
-        radar_points_ = radar_points(radar_snapshot_, now);
-        for (size_t i = 0; i < radar_filter_buttons_.size(); ++i)
-            lv_obj_set_style_border_color(radar_filter_buttons_[i], color(i == static_cast<size_t>(radar_snapshot_.filter) ? 0x7AF5AC : LINE), LV_PART_MAIN);
-        std::string status = radar_snapshot_.paused ? "ESCANEO PAUSADO" :
-            truncate(radar_snapshot_.wifi_status, 38)+" · "+truncate(radar_snapshot_.ble_status, 35);
-        if (radar_snapshot_.limited) status += " · LISTA LIMITADA";
-        set_text(radar_status_, status);
-        set_text(lv_obj_get_child(radar_pause_button_, 0), radar_snapshot_.paused ? "REANUDAR" : "PAUSAR");
-        set_text(lv_obj_get_child(radar_sound_button_, 0), radar_snapshot_.sound ? "SONIDO: SÍ" : "SONIDO: NO");
-        std::vector<const RadarEmitter*> entries;
-        const RadarEmitter* selected = nullptr;
-        for (const auto& e : radar_snapshot_.emitters) {
-            if (radar_matches(e.observation.kind, radar_snapshot_.filter)) entries.push_back(&e);
-            if (e.id == radar_snapshot_.selected_id) selected = &e;
-        }
-        const int pages = std::max(1, static_cast<int>((entries.size()+11)/12));
-        radar_page_ = std::clamp(radar_page_, 0, pages-1);
-        for (size_t i = 0; i < radar_rows_.size(); ++i) {
-            const size_t index = radar_page_*12+i;
-            if (index >= entries.size()) { lv_obj_add_flag(radar_rows_[i], LV_OBJ_FLAG_HIDDEN); continue; }
-            const auto& e = *entries[index];
-            radar_row_actions_[i]->id = e.id;
-            const std::string caption = std::string(e.observation.kind == RadarKind::Wifi ? "W " : "B ")+
-                truncate(e.observation.name, 23)+" · "+std::to_string(e.observation.rssi)+" dBm"+
-                (now-e.last_seen_ms >= 15000 ? " · Sin señal reciente" : "");
-            set_text(lv_obj_get_child(radar_rows_[i],0), caption);
-            lv_obj_remove_flag(radar_rows_[i], LV_OBJ_FLAG_HIDDEN);
-            lv_obj_set_style_border_color(radar_rows_[i], color(e.id == radar_snapshot_.selected_id ? 0xFFDB65 : 0x23513A), LV_PART_MAIN);
-        }
-        set_text(radar_page_label_, std::to_string(entries.size())+" emisores · "+std::to_string(radar_page_+1)+"/"+std::to_string(pages));
-        int32_t values[61]; std::fill_n(values,61,LV_CHART_POINT_NONE);
-        if (selected) {
-            const auto& o = selected->observation;
-            const int64_t age = std::max<int64_t>(0,now-selected->last_seen_ms)/1000;
-            std::string detail = truncate(o.name,28)+"\n"+(o.kind == RadarKind::Wifi ? "WI-FI 2,4 GHz" : "BLUETOOTH LE")+
-                " · "+radar_address(o)+"\n"+std::to_string(o.rssi)+" dBm · media "+
-                std::to_string(static_cast<int>(std::round(selected->smoothed_rssi)))+" dBm\n";
-            if (o.kind == RadarKind::Wifi) detail += "Canal "+std::to_string(o.channel)+(o.security ? " · Protegida\n" : " · Abierta\n");
-            else detail += "Tipo dirección: "+std::to_string(o.address_type)+"\n";
-            detail += age >= 15 ? "Sin señal reciente" : radar_trend_name(selected->trend);
-            detail += " · Visto hace "+std::to_string(age)+" s";
-            set_text(radar_detail_,detail);
-            for (size_t i = 0; i < selected->history_count; ++i) {
-                const auto& sample = selected->history[i];
-                const int64_t seconds = (now-sample.time_ms)/1000;
-                if (seconds >= 0 && seconds <= 60) values[60-seconds] = static_cast<int32_t>(std::round(sample.rssi));
-            }
-        } else set_text(radar_detail_, "Selecciona un punto o una fila para seguir su señal.\n\nLa intensidad depende también de paredes, antenas e interferencias.");
-        auto* graph_values = lv_chart_get_y_array(radar_chart_,radar_series_);
-        if (std::memcmp(graph_values, values, sizeof(values))) {
-            std::copy_n(values,61,graph_values); lv_chart_refresh(radar_chart_);
-        }
-    }
-    if (radar_renderer_ && overlay_ == Overlay::None) {
-        radar_renderer_->draw(radar_points_,radar_snapshot_.selected_id, static_cast<float>(now%6000)*6.2831853f/6000.f);
-        ++radar_frames_;
-    }
-    if (now-radar_fps_since_ms_ >= 10000) {
-        ESP_LOGI(TAG_UI,"Radar %.1f fps de composición · %dx%d · %u emisores · %lu reportes descartados",
-                 radar_frames_*1000.f/(now-radar_fps_since_ms_),
-                 static_cast<int>(lv_display_get_horizontal_resolution(display_)),
-                 static_cast<int>(lv_display_get_vertical_resolution(display_)),
-                 static_cast<unsigned>(radar_snapshot_.emitters.size()),
-                 static_cast<unsigned long>(radar_snapshot_.dropped_reports));
-        radar_fps_since_ms_ = now; radar_frames_ = 0;
-    }
-}
-
-void AppUi::render_hourglass_setup()
-{
-    lv_obj_t* title = label(screen_, "RELOJ DE ARENA", &FONT_NUMBER, theme::HourglassGold);
-    lv_obj_set_pos(title, 32, 86);
-    button(screen_, "INICIO", 544, 80, 144, 52, ActionCode::GoHome);
-    lv_obj_t* help = label(screen_, "Elige cuánto tarda la arena en caer con el reloj vertical.", &FONT_BODY, TEXT);
-    lv_obj_set_pos(help, 32, 150);
-    lv_obj_set_width(help, 656);
-    constexpr int presets[] = {1, 5, 10, 15, 25, 45, 60};
-    for (size_t i = 0; i < std::size(presets); ++i) {
-        const std::string text = std::to_string(presets[i]) + "m";
-        button(screen_, text.c_str(), 32 + static_cast<int>(i) * 94, 220, 86, 60,
-               ActionCode::HourglassPreset, 0, presets[i], nullptr, PANEL_ALT, theme::HourglassFrame);
-    }
-    lv_obj_t* caption = label(screen_, "DURACIÓN PERSONALIZADA · MINUTOS", &FONT_LABEL, theme::HomeMuted);
-    lv_obj_set_pos(caption, 32, 330);
-    std::string options;
-    for (int minutes = 1; minutes <= 120; ++minutes) {
-        if (minutes > 1) options += '\n';
-        options += std::to_string(minutes);
-    }
-    hourglass_duration_roller_ = lv_roller_create(screen_);
-    place(hourglass_duration_roller_, 230, 388, 260, 268);
-    lv_roller_set_options(hourglass_duration_roller_, options.c_str(), LV_ROLLER_MODE_NORMAL);
-    lv_roller_set_visible_row_count(hourglass_duration_roller_, 5);
-    lv_obj_set_style_text_font(hourglass_duration_roller_, &FONT_NUMBER, LV_PART_MAIN);
-    lv_obj_set_style_text_line_space(hourglass_duration_roller_, 12, LV_PART_MAIN);
-    lv_obj_set_style_text_color(hourglass_duration_roller_, color(theme::HomeMuted), LV_PART_MAIN);
-    lv_obj_set_style_bg_color(hourglass_duration_roller_, color(PANEL_ALT), LV_PART_MAIN);
-    lv_obj_set_style_border_color(hourglass_duration_roller_, color(theme::HourglassFrame), LV_PART_MAIN);
-    lv_obj_set_style_bg_color(hourglass_duration_roller_, color(PANEL_ALT), LV_PART_SELECTED);
-    lv_obj_set_style_text_color(hourglass_duration_roller_, color(theme::HourglassGold), LV_PART_SELECTED);
-    lv_obj_set_style_text_font(hourglass_duration_roller_, &FONT_NUMBER, LV_PART_SELECTED);
-    lv_roller_set_selected(hourglass_duration_roller_, hourglass_selected_minutes_ - 1, LV_ANIM_OFF);
-    lv_obj_t* note = label(screen_,
-        "Coloca la Tab5 vertical para iniciar. Inclinarla modifica el flujo; darle la vuelta hace caer la arena "
-        "en sentido contrario.\n\nDurante el uso, toca la pantalla para mostrar los controles.", &FONT_BODY, MUTED);
-    lv_obj_set_pos(note, 70, 730);
-    lv_obj_set_width(note, 580);
-    hourglass_error_label_ = label(screen_, "", &FONT_BODY, DANGER);
-    lv_obj_set_pos(hourglass_error_label_, 70, 930);
-    lv_obj_set_width(hourglass_error_label_, 580);
-    button(screen_, hourglass_config_from_session_ ? "APLICAR E INICIAR" : "INICIAR", 70, 1020, 580, 72,
-           ActionCode::HourglassStart, 0, 0, nullptr, PANEL_ALT, theme::HourglassGold);
-    button(screen_, "CANCELAR", 70, 1110, 580, 60, ActionCode::HourglassCancelSetup);
-}
-
-void AppUi::render_hourglass()
-{
-    // Entire display is a reveal target; controls sit above this layer.
-    lv_obj_t* touch = lv_obj_create(screen_);
-    place(touch, 0, 0, 720, 1280);
-    lv_obj_set_style_bg_opa(touch, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_border_width(touch, 0, LV_PART_MAIN);
-    lv_obj_remove_flag(touch, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_event_cb(touch, action_callback, LV_EVENT_CLICKED,
-                        make_action(ActionCode::HourglassToggleControls));
-    lv_obj_t* image = lv_image_create(screen_);
-    place(image, 120, 60, 480, 1040);
-    lv_obj_remove_flag(image, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_remove_flag(image, LV_OBJ_FLAG_SCROLLABLE);
-    hourglass_renderer_ = std::make_unique<HourglassRenderer>();
-    if (!hourglass_renderer_->init(image)) {
-        lv_obj_delete(image);
-        hourglass_renderer_.reset();
-        hourglass_.pause();
-        hourglass_controls_open_ = true;
-        show_info("Sin memoria para el reloj", "Vuelve a Inicio y abre el módulo de nuevo.");
-    }
-    hourglass_time_label_ = label(screen_, "00:00", &FONT_DISPLAY, theme::HomeInk);
-    lv_obj_set_width(hourglass_time_label_, 600);
-    lv_obj_set_style_text_align(hourglass_time_label_, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-    lv_obj_set_pos(hourglass_time_label_, 60, 1170);
-    lv_obj_remove_flag(hourglass_time_label_, LV_OBJ_FLAG_CLICKABLE);
-
-    hourglass_controls_ = panel(screen_, 32, 944, 656, 300);
-    lv_obj_set_style_bg_opa(hourglass_controls_, LV_OPA_90, LV_PART_MAIN);
-    lv_obj_set_style_border_color(hourglass_controls_, color(theme::HourglassFrame), LV_PART_MAIN);
-    hourglass_error_label_ = label(hourglass_controls_, "", &FONT_BODY, DANGER);
-    lv_obj_set_pos(hourglass_error_label_, 16, 10);
-    lv_obj_set_width(hourglass_error_label_, 624);
-    hourglass_primary_ = button(hourglass_controls_, "PAUSAR", 16, 70, 300, 56, ActionCode::HourglassPauseResume,
-                                0, 0, nullptr, PANEL_ALT, theme::HourglassGold);
-    button(hourglass_controls_, "REINICIAR", 336, 70, 300, 56, ActionCode::HourglassAskReset);
-    button(hourglass_controls_, "DURACIÓN", 16, 140, 300, 56, ActionCode::HourglassDuration);
-    button(hourglass_controls_, "INICIO", 336, 140, 300, 56, ActionCode::GoHome);
-    button(hourglass_controls_, "OCULTAR CONTROLES", 16, 222, 620, 56, ActionCode::HourglassToggleControls);
-    if (!hourglass_controls_open_) lv_obj_add_flag(hourglass_controls_, LV_OBJ_FLAG_HIDDEN);
-    hourglass_controls_since_us_ = esp_timer_get_time();
-    hourglass_fps_since_us_ = esp_timer_get_time();
-    hourglass_frames_ = 0;
-    update_hourglass();
-}
-
-void AppUi::update_hourglass()
-{
-    if (screen_off_ || (view_ != View::Hourglass && view_ != View::HourglassSetup)) return;
-    const HourglassSnapshot snapshot = hourglass_.snapshot();
-    if (hourglass_start_pending_ && snapshot.command_id >= hourglass_pending_command_) {
-        if (snapshot.state == HourglassState::Running) {
-            hourglass_start_pending_ = false;
-            hourglass_controls_open_ = false;
-            view_ = View::Hourglass;
-            schedule_render();
-            return;
-        }
-        if (snapshot.error != HourglassError::None) hourglass_start_pending_ = false;
-    }
-    const std::string error = hourglass_error_text(snapshot.error);
-    if (hourglass_error_label_ && error != hourglass_last_error_) {
-        lv_label_set_text(hourglass_error_label_, error.c_str());
-        hourglass_last_error_ = error;
-        if (!error.empty() && hourglass_controls_) {
-            hourglass_controls_open_ = true;
-            lv_obj_remove_flag(hourglass_controls_, LV_OBJ_FLAG_HIDDEN);
-        }
-    }
-    if (view_ == View::HourglassSetup) return;
-    const uint64_t seconds = snapshot.elapsed_us / 1000000;
-    char text[64];
-    if (seconds >= 3600) {
-        std::snprintf(text, sizeof(text), "%llu:%02llu:%02llu", seconds / 3600, (seconds / 60) % 60, seconds % 60);
-    } else {
-        std::snprintf(text, sizeof(text), "%02llu:%02llu", seconds / 60, seconds % 60);
-    }
-    std::string time = text;
-    if (snapshot.state == HourglassState::Completed) time += " · FINALIZADO";
-    else if (snapshot.state == HourglassState::Paused) time += " · PAUSADO";
-    if (hourglass_time_label_ && time != hourglass_last_time_) {
-        lv_label_set_text(hourglass_time_label_, time.c_str());
-        hourglass_last_time_ = time;
-    }
-    if (hourglass_primary_) {
-        const char* caption = snapshot.state == HourglassState::Running ? "PAUSAR" :
-                              snapshot.state == HourglassState::Paused ? "REANUDAR" :
-                              snapshot.state == HourglassState::Ready ? "INICIAR" : "CONTINUAR";
-        lv_obj_t* label = lv_obj_get_child(hourglass_primary_, 0);
-        if (std::strcmp(lv_label_get_text(label), caption) != 0) lv_label_set_text(label, caption);
-    }
-    const int64_t now = esp_timer_get_time();
-    if (hourglass_controls_open_ && snapshot.state == HourglassState::Running && error.empty() &&
-        overlay_ == Overlay::None && now - hourglass_controls_since_us_ >= 4000000) {
-        hourglass_controls_open_ = false;
-        if (hourglass_controls_) lv_obj_add_flag(hourglass_controls_, LV_OBJ_FLAG_HIDDEN);
-    }
-    if (hourglass_renderer_ && (snapshot.frame != hourglass_last_frame_ ||
-                               snapshot.generation != hourglass_last_generation_)) {
-        hourglass_renderer_->draw(snapshot);
-        hourglass_last_frame_ = snapshot.frame;
-        hourglass_last_generation_ = snapshot.generation;
-        ++hourglass_frames_;
-    }
-    if (now - hourglass_fps_since_us_ >= 10000000) {
-        ESP_LOGI(TAG_UI, "Reloj de arena: %.1f FPS, masa superior %.6f, inferior %.6f, estado %u",
-                 hourglass_frames_ * 1000000.0 / (now - hourglass_fps_since_us_),
-                 snapshot.upper_mass, snapshot.lower_mass, static_cast<unsigned>(snapshot.state));
-        hourglass_fps_since_us_ = now;
-        hourglass_frames_ = 0;
-    }
-}
-
-void AppUi::leave_hourglass(View target)
-{
-    hourglass_.set_visible(false);
-    hourglass_visible_ = false;
-    hourglass_start_pending_ = false;
-    view_ = target;
-    const int detected = orientation_.poll();
-    current_rotation_ = detected >= 0 ? detected : hourglass_return_rotation_;
-    orientation_.set_current(current_rotation_);
-    static const lv_display_rotation_t rotations[] = {LV_DISPLAY_ROTATION_0, LV_DISPLAY_ROTATION_90,
-                                                      LV_DISPLAY_ROTATION_180, LV_DISPLAY_ROTATION_270};
-    lv_display_set_rotation(display_, rotations[current_rotation_]);
-    home_rotation_pending_ = false;
-    home_rotation_sources_.clear();
 }
 
 void AppUi::render_header(bool compact)
@@ -2149,6 +1752,22 @@ lv_obj_t* AppUi::spanish_keyboard(int x, int y, int width, int height)
     lv_obj_set_style_text_color(matrix, color(CYAN), static_cast<lv_style_selector_t>(LV_PART_ITEMS) |
                                                      static_cast<lv_style_selector_t>(LV_STATE_CHECKED));
     keyboard_ = matrix;
+    if(habit_view()) {
+        lv_obj_set_style_bg_color(dock,color(theme::HabitPaper),0);
+        lv_obj_set_style_radius(dock,3,0);
+        lv_obj_set_style_radius(matrix,3,LV_PART_MAIN);
+        lv_obj_set_style_radius(matrix,2,LV_PART_ITEMS);
+        lv_obj_set_style_bg_color(matrix,color(theme::HabitPaper),LV_PART_MAIN);
+        lv_obj_set_style_bg_color(matrix,color(theme::HabitSheet),LV_PART_ITEMS);
+        lv_obj_set_style_border_color(matrix,color(theme::HabitInk),LV_PART_ITEMS);
+        lv_obj_set_style_text_color(matrix,color(theme::HabitInk),LV_PART_ITEMS);
+        for(auto state:{LV_STATE_PRESSED,LV_STATE_CHECKED}) {
+            const auto selector=static_cast<lv_style_selector_t>(LV_PART_ITEMS)|static_cast<lv_style_selector_t>(state);
+            lv_obj_set_style_bg_color(matrix,color(theme::HabitBlue),selector);
+            lv_obj_set_style_text_color(matrix,color(0xFFFFFF),selector);
+            lv_obj_set_style_border_color(matrix,color(theme::HabitBlue),selector);
+        }
+    }
     update_keyboard_map();
     return matrix;
 }
@@ -2415,6 +2034,7 @@ void AppUi::render_screen_off()
 
 void AppUi::render_overlay()
 {
+    if(overlay_==Overlay::HabitDelete || overlay_==Overlay::HabitInterrupt) {render_habit_overlay();return;}
     const int width = lv_display_get_horizontal_resolution(display_);
     const int height = lv_display_get_vertical_resolution(display_);
     lv_obj_t* shade = lv_obj_create(screen_);
@@ -2436,22 +2056,6 @@ void AppUi::render_overlay()
         lv_obj_set_pos(text, 24, 82); lv_obj_set_width(text, box_width - 48);
         button(box, "NUEVA PARTIDA", 24, 202, box_width - 48, 58, ActionCode::TetrisConfirmNew);
         button(box, "CANCELAR", 24, 274, box_width - 48, 58, ActionCode::CloseOverlay);
-        return;
-    }
-
-    if (overlay_ == Overlay::RadarPick) {
-        lv_obj_t* title = label(box, "ELIGE EL EMISOR", &FONT_LABEL, CYAN);
-        lv_obj_set_pos(title, 18, 12);
-        int y = 58;
-        for (uint32_t id : radar_hits_) {
-            const auto found = std::find_if(radar_snapshot_.emitters.begin(), radar_snapshot_.emitters.end(),
-                                           [id](const RadarEmitter& e) { return e.id == id; });
-            if (found == radar_snapshot_.emitters.end()) continue;
-            const std::string text = truncate(found->observation.name, 28) + " · " + radar_address(found->observation);
-            button(box, text.c_str(), 18, y, box_width-36, 52, ActionCode::RadarSelect, id);
-            y += 60;
-        }
-        button(box, "CANCELAR", 18, y, box_width-36, 52, ActionCode::CloseOverlay);
         return;
     }
 
@@ -2570,9 +2174,6 @@ void AppUi::render_overlay()
     } else if (overlay_ == Overlay::ConfirmDictationReplace) {
         title_text = "REEMPLAZAR TÍTULO";
         body_text = "El editor ya contiene un título. ¿Quieres reemplazarlo por la transcripción?";
-    } else if (overlay_ == Overlay::ConfirmHourglassReset) {
-        title_text = "REINICIAR RELOJ";
-        body_text = "El tiempo volverá a cero y se preparará una nueva sesión. Tendrás que pulsar Iniciar.";
     } else if (overlay_ == Overlay::MissionDetail) {
         const Mission* mission = find_mission(state_, overlay_mission_id_);
         if (mission != nullptr) {
@@ -2639,10 +2240,6 @@ void AppUi::render_overlay()
         button(box, "CONSERVAR", 24, y, 130, 48, ActionCode::CloseOverlay);
         button(box, "REEMPLAZAR", box_width - 158, y, 130, 48, ActionCode::ConfirmDictationReplace, 0, 0,
                nullptr, ACCENT_SOFT, CYAN);
-    } else if (overlay_ == Overlay::ConfirmHourglassReset) {
-        button(box, "CONSERVAR", 24, y, 130, 48, ActionCode::CloseOverlay);
-        button(box, "REINICIAR", box_width - 158, y, 130, 48, ActionCode::HourglassReset,
-               0, 0, nullptr, PANEL_ALT, theme::HourglassGold);
     } else {
         button(box, "CERRAR", box_width - 144, y, 116, 48, ActionCode::CloseOverlay);
     }
@@ -2650,6 +2247,9 @@ void AppUi::render_overlay()
 
 void AppUi::dispatch(const Action& action)
 {
+    if(action.code>=ActionCode::HabitSelect && action.code<=ActionCode::HabitClock) {dispatch_habit(action);return;}
+    if(habit_critical() && action.code==ActionCode::OpenConnectivity) return;
+    if(habit_critical() && action.code==ActionCode::WakeScreen) capture_habit_fields();
     bool rerender = true;
     switch (action.code) {
         case ActionCode::NewMission:
@@ -2724,10 +2324,7 @@ void AppUi::dispatch(const Action& action)
             open_module(static_cast<ModuleId>(action.value));
             break;
         case ActionCode::GoHome:
-            if (view_ == View::Maze) leave_maze();
             if (view_ == View::Tetris) leave_tetris();
-            if (view_ == View::Radar) { radar_.visible(false); radar_visible_ = false; }
-            if (view_ == View::Hourglass || view_ == View::HourglassSetup) leave_hourglass();
             if (view_ == View::Assistant) {
                 assistant_voice_.cancel();
                 assistant_.close(static_cast<uint64_t>(esp_timer_get_time() / 1000));
@@ -2735,17 +2332,6 @@ void AppUi::dispatch(const Action& action)
             overlay_ = Overlay::None;
             view_ = View::Home;
             break;
-        case ActionCode::MazeStart:
-            if (!maze_.start()) show_info("Laberinto ocupado", "Vuelve a intentarlo en unos segundos.");
-            rerender=false;break;
-        case ActionCode::MazeResume:
-            maze_.resume();rerender=false;break;
-        case ActionCode::MazePause:
-            maze_.pause();rerender=false;break;
-        case ActionCode::MazeCalibrate:
-            maze_.calibrate();rerender=false;break;
-        case ActionCode::MazeSelect:
-            maze_.select(action.value);rerender=false;break;
         case ActionCode::TetrisNew:
             if (tetris_snapshot_.state == TetrisState::Paused || tetris_snapshot_.state == TetrisState::Running) {
                 tetris_.pause(); overlay_ = Overlay::ConfirmTetrisNew;
@@ -2777,85 +2363,6 @@ void AppUi::dispatch(const Action& action)
             tetris_.settings(tetris_snapshot_.music, tetris_snapshot_.effects,
                              std::clamp<int>(tetris_snapshot_.volume + action.value, 0, 100));
             rerender = false;
-            break;
-        case ActionCode::RadarFilter:
-            radar_.filter(static_cast<el_sistema::RadarFilter>(action.value));
-            radar_page_ = 0; radar_next_update_ms_ = 0; rerender = false;
-            break;
-        case ActionCode::RadarPause:
-            radar_.pause(!radar_snapshot_.paused); radar_next_update_ms_ = 0; rerender = false;
-            break;
-        case ActionCode::RadarSound:
-            radar_.sound(!radar_snapshot_.sound); radar_next_update_ms_ = 0; rerender = false;
-            break;
-        case ActionCode::RadarSelect:
-            radar_.select(action.id); radar_next_update_ms_ = 0;
-            if (overlay_ == Overlay::RadarPick) overlay_ = Overlay::None;
-            else rerender = false;
-            break;
-        case ActionCode::RadarPage:
-            radar_page_ = std::max(0, radar_page_ + action.value); radar_next_update_ms_ = 0; rerender = false;
-            break;
-        case ActionCode::HourglassPreset:
-            hourglass_selected_minutes_ = static_cast<uint16_t>(action.value);
-            if (hourglass_duration_roller_) lv_roller_set_selected(hourglass_duration_roller_, action.value - 1,
-                                                                  LV_ANIM_ON);
-            rerender = false;
-            break;
-        case ActionCode::HourglassStart:
-            if (hourglass_duration_roller_) {
-                hourglass_selected_minutes_ = lv_roller_get_selected(hourglass_duration_roller_) + 1;
-            }
-            hourglass_pending_command_ = hourglass_.start(hourglass_selected_minutes_);
-            if (hourglass_pending_command_) hourglass_start_pending_ = true;
-            else show_info("El reloj está ocupado", "Vuelve a intentarlo en unos segundos.");
-            rerender = overlay_ != Overlay::None;
-            break;
-        case ActionCode::HourglassToggleControls:
-            hourglass_controls_open_ = !hourglass_controls_open_;
-            hourglass_controls_since_us_ = esp_timer_get_time();
-            if (hourglass_controls_) {
-                if (hourglass_controls_open_) lv_obj_remove_flag(hourglass_controls_, LV_OBJ_FLAG_HIDDEN);
-                else lv_obj_add_flag(hourglass_controls_, LV_OBJ_FLAG_HIDDEN);
-            }
-            rerender = false;
-            break;
-        case ActionCode::HourglassPauseResume: {
-            const HourglassSnapshot state = hourglass_.snapshot();
-            bool accepted = true;
-            if (state.state == HourglassState::Running) accepted = hourglass_.pause();
-            else if (state.state == HourglassState::Paused) accepted = hourglass_.resume();
-            else if (state.state == HourglassState::Ready) accepted = hourglass_.start(state.duration_minutes);
-            else {
-                // A completed clock is armed already. Hide controls and wait for
-                // the physical inversion; do not refill or reset it here.
-                hourglass_controls_open_ = false;
-                if (hourglass_controls_) lv_obj_add_flag(hourglass_controls_, LV_OBJ_FLAG_HIDDEN);
-            }
-            if (!accepted) show_info("El reloj está ocupado", "Vuelve a intentarlo en unos segundos.");
-            rerender = !accepted;
-            break;
-        }
-        case ActionCode::HourglassAskReset:
-            overlay_ = Overlay::ConfirmHourglassReset;
-            break;
-        case ActionCode::HourglassReset:
-            if (!hourglass_.reset()) show_info("El reloj está ocupado", "Vuelve a intentarlo en unos segundos.");
-            else overlay_ = Overlay::None;
-            hourglass_controls_open_ = true;
-            break;
-        case ActionCode::HourglassDuration:
-            hourglass_.pause();
-            hourglass_selected_minutes_ = hourglass_.snapshot().duration_minutes;
-            hourglass_config_from_session_ = true;
-            view_ = View::HourglassSetup;
-            break;
-        case ActionCode::HourglassCancelSetup:
-            hourglass_start_pending_ = false;
-            if (hourglass_config_from_session_) {
-                hourglass_controls_open_ = true;
-                view_ = View::Hourglass;
-            } else leave_hourglass();
             break;
         case ActionCode::AssistantTap:
             assistant_.tap(static_cast<uint64_t>(esp_timer_get_time() / 1000));
@@ -2952,7 +2459,6 @@ void AppUi::dispatch(const Action& action)
             overlay_ = Overlay::None;
             break;
         case ActionCode::ReminderResume:
-            if (view_ == View::Hourglass || view_ == View::HourglassSetup) leave_hourglass(View::Dashboard);
             service_.resume_from_reminder(action.id);
             overlay_ = Overlay::None;
             break;
@@ -3162,12 +2668,14 @@ void AppUi::dispatch(const Action& action)
             set_active_textarea(description_textarea_);
             rerender = false;
             break;
+        default: break; // Habit actions are dispatched above to their own UI.
     }
     if (rerender) schedule_render();
 }
 
 void AppUi::tick()
 {
+    update_habits();
     // Boton fisico (GPIO35): pulsacion corta enciende o apaga la pantalla,
     // mantenida apaga el equipo.
     for (ButtonEvent event = button_.next_event(); event != ButtonEvent::None; event = button_.next_event()) {
@@ -3293,17 +2801,9 @@ void AppUi::tick()
                 lv_label_set_text(reminder_label, reminder_text(*mission).c_str());
             }
         }
-        if (overlay_ == Overlay::None && !dictation_.busy() && !assistant_voice_.busy() &&
-            (view_ != View::Hourglass || hourglass_controls_open_)) {
+        if (overlay_ == Overlay::None && !dictation_.busy() && !assistant_voice_.busy()) {
             const std::vector<MissionId> due = service_.due_reminders();
             if (!due.empty()) {
-                if (view_ == View::Maze) {
-                    const auto game=maze_.snapshot();
-                    if (!game.available) return;
-                    if (game.state==MazeState::Running || game.state==MazeState::Calibrating) {
-                        maze_.pause();return; // Never show reminders over a moving ball.
-                    }
-                }
                 if (view_ == View::Tetris) {
                     const auto game = tetris_.snapshot();
                     if (!game.available) return;
@@ -3320,16 +2820,13 @@ void AppUi::tick()
         }
     }
 
-    const bool rotation_locked = view_ == View::Editor || view_ == View::SearchEditor || view_ == View::ClockSetup ||
-                                 view_ == View::DictationSetup || view_ == View::Hourglass ||
-                                 view_ == View::HourglassSetup || view_ == View::Tetris || view_ == View::Maze || overlay_ != Overlay::None || screen_off_ ||
+    update_habit_notices();
+    const bool rotation_locked = habit_critical() || (view_==View::HabitAlerts && habit_alert_return_==View::Tetris) ||
+                                 view_ == View::Editor || view_ == View::SearchEditor || view_ == View::ClockSetup ||
+                                 view_ == View::DictationSetup || view_ == View::Tetris || overlay_ != Overlay::None || screen_off_ ||
                                  dictation_.busy() || assistant_voice_.busy() || home_rotation_active_ || render_pending_;
     const int next = orientation_.poll();
-    if (!rotation_locked
-#ifdef EL_SISTEMA_RADAR_SMOKE
-        && !radar_validation_active_
-#endif
-    ) {
+    if (!rotation_locked) {
         last_rotation_lock_ = -1;
         if (next >= 0 && next != current_rotation_) set_rotation(next);
     } else if (next >= 0 && next != current_rotation_ && next != last_rotation_lock_) {
@@ -3388,11 +2885,7 @@ void AppUi::open_module(ModuleId module)
     const ModuleDescriptor* descriptor = find_module(module);
     if (descriptor == nullptr) return;
     overlay_ = Overlay::None;
-    if (module == ModuleId::Maze) {
-        maze_return_rotation_=current_rotation_;current_rotation_=0;orientation_.set_current(0);
-        lv_display_set_rotation(display_,LV_DISPLAY_ROTATION_0);home_rotation_pending_=false;
-        view_=View::Maze;return;
-    }
+    if(module==ModuleId::Habits) {view_=View::Habits;habit_message_.clear();return;}
     if (module == ModuleId::Tetris) {
         tetris_return_rotation_ = current_rotation_;
         current_rotation_ = 0; orientation_.set_current(0);
@@ -3401,7 +2894,6 @@ void AppUi::open_module(ModuleId module)
         tetris_playing_ = tetris_sound_menu_ = false;
         view_ = View::Tetris; return;
     }
-    if (module == ModuleId::Radar) { view_ = View::Radar; radar_page_ = 0; return; }
     if (module == ModuleId::Productivity) {
         view_ = View::Dashboard;
         if (!state_.settings.tutorial_completed) overlay_ = Overlay::Tutorial;
@@ -3410,19 +2902,6 @@ void AppUi::open_module(ModuleId module)
     if (module == ModuleId::Assistant) {
         assistant_.open(static_cast<uint64_t>(esp_timer_get_time() / 1000));
         view_ = View::Assistant;
-    }
-    if (module == ModuleId::Hourglass) {
-        hourglass_return_rotation_ = current_rotation_;
-        current_rotation_ = 0;
-        orientation_.set_current(0);
-        lv_display_set_rotation(display_, LV_DISPLAY_ROTATION_0);
-        home_rotation_pending_ = false;
-        const HourglassSnapshot snapshot = hourglass_.snapshot();
-        hourglass_selected_minutes_ = snapshot.duration_minutes;
-        hourglass_start_pending_ = false;
-        hourglass_config_from_session_ = snapshot.state != HourglassState::Ready;
-        hourglass_controls_open_ = hourglass_config_from_session_;
-        view_ = hourglass_config_from_session_ ? View::Hourglass : View::HourglassSetup;
     }
 }
 
@@ -3463,14 +2942,8 @@ bool AppUi::is_portrait() const
 
 void AppUi::set_screen_off(bool off)
 {
-    if (off && view_ == View::Maze) maze_.set_visible(false);
+    if(habit_critical()) capture_habit_fields();
     if (off && view_ == View::Tetris) { tetris_.set_visible(false); tetris_gesture_.cancel(); }
-    if (off && view_ == View::Radar) { radar_.visible(false); radar_visible_ = false; }
-    if (off && (view_ == View::Hourglass || view_ == View::HourglassSetup)) {
-        hourglass_.set_visible(false);
-        hourglass_visible_ = false;
-        hourglass_controls_open_ = true;
-    }
     screen_off_ = off;
     bsp_display_brightness_set(off ? 0 : 72);
     ESP_LOGI(TAG_UI, "Pantalla %s", off ? "apagada" : "encendida");
@@ -3480,9 +2953,7 @@ void AppUi::set_screen_off(bool off)
 void AppUi::power_off_device()
 {
     ESP_LOGW(TAG_UI, "Apagando el equipo");
-    hourglass_.set_visible(false);
     tetris_.set_visible(false);
-    maze_.set_visible(false);
     service_.save();
     bsp_display_brightness_set(0);
     vTaskDelay(pdMS_TO_TICKS(150));
@@ -3583,7 +3054,7 @@ void AppUi::refresh_statusbar()
         lv_label_set_text(status_net_label_, net_text.c_str());
         const bool home = view_ == View::Home;
         lv_obj_set_style_text_color(status_net_label_,
-                                    color(dictation_.wifi_connected() ? (home ? theme::HomeInk : CYAN)
+                                    color(habit_view()?theme::HabitInk:dictation_.wifi_connected() ? (home ? theme::HomeInk : CYAN)
                                                                       : (home ? theme::HomeMuted : MUTED)),
                                     LV_PART_MAIN);
     }

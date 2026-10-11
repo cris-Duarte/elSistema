@@ -527,16 +527,16 @@ bool ConnectivityService::validate_credentials(const NetworkCredentials& credent
     return true;
 }
 
-bool ConnectivityService::scan_observations(std::vector<RadarObservation>& observations, std::string& error)
+bool ConnectivityService::scan()
 {
-    observations.clear();
-    if (!initialized_ && !init()) { error = last_error_; return false; }
+    set_state(ConnectivityPhase::Scanning, "Buscando redes disponibles");
+    if (!initialized_ && !init()) return false;
     wifi_scan_config_t config {};
     config.show_hidden = true;
     config.scan_time.active.max = 120;
     esp_err_t err = esp_wifi_scan_start(&config, true);
     if (err != ESP_OK) {
-        error = std::string("Escaneo pospuesto: ") + esp_err_to_name(err);
+        set_state(ConnectivityPhase::Error, {}, std::string("Escaneo pospuesto: ") + esp_err_to_name(err));
         return false;
     }
     uint16_t count = 0;
@@ -545,38 +545,20 @@ bool ConnectivityService::scan_observations(std::vector<RadarObservation>& obser
     std::vector<wifi_ap_record_t> records(count);
     if (err == ESP_OK && count > 0) err = esp_wifi_scan_get_ap_records(&count, records.data());
     if (err != ESP_OK) {
-        error = "No se pudieron leer las redes encontradas";
+        esp_wifi_clear_ap_list();
+        set_state(ConnectivityPhase::Error, {}, "No se pudieron leer las redes encontradas");
         return false;
     }
-    // get_ap_records frees the driver list, including records beyond the cap.
     if (count == 0) esp_wifi_clear_ap_list();
-    for (uint16_t index = 0; index < count; ++index) {
-        RadarObservation o;
-        std::copy_n(records[index].bssid, 6, o.address.begin());
-        o.name.assign(reinterpret_cast<const char*>(records[index].ssid),
-                      strnlen(reinterpret_cast<const char*>(records[index].ssid), sizeof(records[index].ssid)));
-        o.rssi = records[index].rssi; o.channel = records[index].primary;
-        o.security = static_cast<uint8_t>(records[index].authmode);
-        observations.push_back(std::move(o));
-    }
-    error.clear();
-    return true;
-}
-
-bool ConnectivityService::scan()
-{
-    set_state(ConnectivityPhase::Scanning, "Buscando redes disponibles");
-    std::vector<RadarObservation> records;
-    std::string error;
-    if (!scan_observations(records, error)) { set_state(ConnectivityPhase::Error, {}, error); return false; }
     std::map<std::string, WifiNetwork> unique;
     for (const auto& record : records) {
-        const std::string& ssid = record.name;
+        const std::string ssid(reinterpret_cast<const char*>(record.ssid),
+                               strnlen(reinterpret_cast<const char*>(record.ssid), sizeof(record.ssid)));
         if (ssid.empty()) continue;
         const bool known = std::any_of(profiles_.begin(), profiles_.end(), [&](const NetworkProfile& profile) {
             return profile.ssid == ssid;
         });
-        WifiNetwork found {ssid, static_cast<int8_t>(record.rssi), record.security != WIFI_AUTH_OPEN, known};
+        WifiNetwork found {ssid, static_cast<int8_t>(record.rssi), record.authmode != WIFI_AUTH_OPEN, known};
         auto previous = unique.find(ssid);
         if (previous == unique.end() || previous->second.rssi < found.rssi) unique[ssid] = std::move(found);
     }

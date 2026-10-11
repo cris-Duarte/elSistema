@@ -257,14 +257,23 @@ bool AudioService::play(const AudioBuffer& audio, const std::atomic<bool>* cance
 bool AudioService::play_pcm(const int16_t* samples, size_t sample_count, uint32_t sample_rate,
                             const std::atomic<bool>* cancel_requested)
 {
-    if (samples == nullptr || sample_count == 0 || sample_rate != 16000 || (!available_ && !init())) {
+    if (samples == nullptr || sample_count == 0 || sample_rate != 16000) {
         last_error_ = sample_rate == 16000 ? "No hay PCM para reproducir"
                                            : "La reproducción requiere PCM mono de 16 kHz";
         return false;
     }
+    // Preserve the codec's error instead of replacing it with "No hay PCM".
+    if (!available_ && !init()) return false;
     bsp_codec_config_t* codec = bsp_get_codec_handle();
     constexpr size_t kInputChunk = 256;
-    int16_t stereo48[kInputChunk * 3 * 2];
+    // The 3 KiB conversion buffer used to share a small audio worker stack
+    // with codec initialization, I2S and logging. Keep it in checked PSRAM.
+    std::unique_ptr<int16_t, AudioBuffer::Deleter> stereo48(static_cast<int16_t*>(
+        heap_caps_malloc(kInputChunk * 3 * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)));
+    if (!stereo48) {
+        last_error_ = "PSRAM insuficiente para reproducir el audio";
+        return false;
+    }
     for (size_t offset = 0; offset < sample_count; offset += kInputChunk) {
         if (cancel_requested != nullptr && cancel_requested->load()) return false;
         const size_t count = std::min(kInputChunk, sample_count - offset);
@@ -272,12 +281,12 @@ bool AudioService::play_pcm(const int16_t* samples, size_t sample_count, uint32_
         for (size_t i = 0; i < count; ++i) {
             const int16_t value = samples[offset + i];
             for (int repeat = 0; repeat < 3; ++repeat) {
-                stereo48[cursor++] = value;
-                stereo48[cursor++] = value;
+                stereo48.get()[cursor++] = value;
+                stereo48.get()[cursor++] = value;
             }
         }
         size_t written = 0;
-        if (codec->i2s_write(stereo48, cursor * sizeof(int16_t), &written, 1000) != ESP_OK ||
+        if (codec->i2s_write(stereo48.get(), cursor * sizeof(int16_t), &written, 1000) != ESP_OK ||
             written != cursor * sizeof(int16_t)) {
             last_error_ = "Falló la reproducción de la muestra";
             return false;

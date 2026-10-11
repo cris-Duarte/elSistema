@@ -46,16 +46,11 @@ Asistente** conservan el HUD oscuro de fantasía/RPG que ya tienen. No se debe
 forzar una paleta única entre Inicio y los módulos: la coherencia se mantiene en
 tipografía, escala táctil, claridad, ritmo y calidad de ejecución.
 
-**Reloj de arena** añade un contexto inmersivo negro, con cristal y arena de
-luz dorada; sus controles usan los componentes compartidos. El dorado representa
-material en ese módulo, no XP. Su sesión oculta la barra de estado y bloquea
-el panel vertical para que la rotación física cambie únicamente la arena.
-
-**Radar** usa un instrumento circular verde sobre negro, con señales Wi-Fi
-amarillas y BLE cian. Estos colores identifican tipos de radio, no XP. Su
-barrido es una excepción decorativa explícita: nunca inventa mediciones y
-siempre muestra `INTENSIDAD · NO UBICACIÓN`. Comparte tipografía, controles
-táctiles y navegación; admite las cuatro orientaciones de la interfaz.
+**Hábitos** adopta papel marfil y tinta oscura, contornos definidos de 2 px,
+verde de cumplimiento y azul para acciones/periodos. No aplica la prohibición
+de verde del HUD ni sus superficies oscuras: la paleta propia y los estados
+textuales se describen en `docs/habitos/design.md`. Reutiliza las fuentes y la
+escala táctil, sin MIC, XP, neón, partículas o sombras difusas.
 
 **Tetris** tiene identidad arcade de 8 bits: fondo negro, bloques de siete
 colores y tipografía pixelada original. Juega en vertical fija, oculta la barra

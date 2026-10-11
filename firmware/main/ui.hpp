@@ -3,14 +3,10 @@
 #include "hardware.hpp"
 #include "home_scene.hpp"
 #include "home_renderer.hpp"
-#include "hourglass.hpp"
-#include "hourglass_renderer.hpp"
-#include "radar.hpp"
-#include "radar_renderer.hpp"
 #include "tetris.hpp"
+#include "habits.hpp"
+#include "habit_calendar.hpp"
 #include "tetris_renderer.hpp"
-#include "maze.hpp"
-#include "maze_renderer.hpp"
 #include "modules.hpp"
 #include "assistant.hpp"
 #include "assistant_voice.hpp"
@@ -35,17 +31,14 @@ public:
     AppUi(AppState& state, ApplicationService& service, MissionRepository& repository, ClockService& clock,
           OrientationService& orientation, ButtonService& button, DictationService& dictation,
           PowerService& power, AssistantService& assistant, AssistantVoiceService& assistant_voice,
-          HourglassService& hourglass, RadarService& radar, TetrisService& tetris, MazeService& maze);
+          TetrisService& tetris, HabitService& habits);
     void start(lv_display_t* display);
-#ifdef EL_SISTEMA_RADAR_SMOKE
-    void radar_validation_view(bool open, int rotation = 1);
-#endif
 
 private:
     enum class View { Home, Dashboard, Assistant, History, Editor, ClockSetup, SearchEditor, DictationSetup,
-                      HourglassSetup, Hourglass, Radar, Tetris, Maze };
+                      Tetris, Habits, HabitDetail, HabitEditor, HabitPeriod, HabitSettings, HabitAlerts };
     enum class Overlay { None, Tutorial, Reward, Reminder, ConfirmDelete, ConfirmForgetNetwork, MissionDetail, Info,
-                         Dictation, ConfirmDictationReplace, ConfirmHourglassReset, RadarPick, ConfirmTetrisNew };
+                         Dictation, ConfirmDictationReplace, ConfirmTetrisNew, HabitDelete, HabitInterrupt };
     enum class KeyboardPage { Letters, Numbers, Symbols };
     enum class ActionCode {
         NewMission,
@@ -119,20 +112,6 @@ private:
         GoHome,
         TetrisNew, TetrisConfirmNew, TetrisContinue, TetrisPause, TetrisSound,
         TetrisMusic, TetrisEffects, TetrisVolume,
-        MazeStart, MazeResume, MazePause, MazeCalibrate, MazeSelect,
-        RadarFilter,
-        RadarPause,
-        RadarSound,
-        RadarSelect,
-        RadarPage,
-        HourglassPreset,
-        HourglassStart,
-        HourglassToggleControls,
-        HourglassPauseResume,
-        HourglassAskReset,
-        HourglassReset,
-        HourglassDuration,
-        HourglassCancelSetup,
         AssistantTap,
         AssistantDemo,
         AssistantCelebrate,
@@ -140,6 +119,11 @@ private:
         AssistantVoiceStop,
         AssistantVoiceCancel,
         AssistantVoiceRetry,
+        HabitSelect, HabitFilter, HabitNew, HabitEdit, HabitSave, HabitBack,
+        HabitToday, HabitDay, HabitMosaic, HabitKind, HabitGoalAdjust, HabitGoalWhen,
+        HabitNoticeToggle, HabitNoticeMode, HabitField, HabitAskDelete, HabitDelete,
+        HabitPeriodOpen, HabitPeriodSave, HabitInterruptConfirm, HabitSettings,
+        HabitVolume, HabitTest, HabitPending, HabitSnooze, HabitOmit, HabitClock,
     };
 
     struct Action {
@@ -154,9 +138,6 @@ private:
     static void tick_callback(lv_timer_t* timer);
     static void home_animation_callback(lv_timer_t* timer);
     static void home_touch_callback(lv_event_t* event);
-    static void hourglass_animation_callback(lv_timer_t* timer);
-    static void radar_animation_callback(lv_timer_t* timer);
-    static void radar_touch_callback(lv_event_t* event);
     static void home_rotation_exec(void* ui, int32_t progress);
     static void home_rotation_complete(lv_anim_t* animation);
     static void render_callback(void* user_data);
@@ -166,21 +147,32 @@ private:
 
     void render();
     void render_home();
+    bool habit_view() const;
+    bool habit_critical() const;
+    void render_habits();
+    void render_habit_editor();
+    void render_habit_period();
+    void render_habit_settings();
+    void render_habit_alerts();
+    void render_habit_detail(lv_obj_t* parent, int width);
+    void render_habit_overlay();
+    void update_habits();
+    void update_habit_notices();
+    void render_habit_banner();
+    void dispatch_habit(const Action& action);
+    void open_habit_editor(HabitId id);
+    void capture_habit_fields();
+    bool send_habit(HabitCommand command, bool close_editor = false);
+    lv_obj_t* habit_panel(lv_obj_t* parent,int x,int y,int width,int height,bool scroll=false);
+    lv_obj_t* habit_button(lv_obj_t* parent,const char* text,int x,int y,int width,ActionCode code,
+                          HabitId id=0,int value=0,uint32_t bg=0xFFFCF5);
+    lv_obj_t* habit_field(lv_obj_t* parent,int index,const char* caption,int y,int width,bool multiline=false);
+    HabitContext habit_context() const;
     void render_tetris();
-    void render_maze();
-    void update_maze();
-    void leave_maze();
-    static void maze_animation_callback(lv_timer_t* timer);
     void update_tetris();
     void leave_tetris();
     static void tetris_touch_callback(lv_event_t* event);
     static void tetris_animation_callback(lv_timer_t* timer);
-    void render_radar();
-    void update_radar();
-    void render_hourglass_setup();
-    void render_hourglass();
-    void update_hourglass();
-    void leave_hourglass(View target = View::Home);
     void render_dashboard();
     void render_assistant();
     void render_landscape_dashboard();
@@ -249,15 +241,35 @@ private:
     PowerService& power_;
     AssistantService& assistant_;
     AssistantVoiceService& assistant_voice_;
-    HourglassService& hourglass_;
-    RadarService& radar_;
     TetrisService& tetris_;
-    MazeService& maze_;
-    MazeSnapshot maze_snapshot_{};
-    std::unique_ptr<MazeRenderer> maze_renderer_;
-    lv_timer_t* maze_timer_=nullptr;
-    lv_obj_t* maze_status_=nullptr;
-    int maze_return_rotation_=1;
+    HabitService& habits_;
+    HabitSnapshot habits_snapshot_;
+    std::unique_ptr<HabitCalendar> habit_calendar_;
+    HabitId habit_selected_=0, habit_editing_=0;
+    Habit habit_draft_;
+    int habit_filter_=0, habit_mosaic_offset_=0, habit_goal_=5, habit_period_index_=-1;
+    bool habit_goal_next_=false, habit_wait_close_=false;
+    HabitOperation habit_period_operation_=HabitOperation::Resume;
+    std::array<std::string,6> habit_fields_{};
+    std::array<lv_obj_t*,6> habit_textareas_{};
+    std::vector<std::pair<HabitId,lv_obj_t*>> habit_counters_;
+    lv_obj_t* habit_best_=nullptr;
+    lv_obj_t* habit_banner_=nullptr;
+    lv_obj_t* habit_pending_indicator_=nullptr;
+    lv_obj_t* habit_error_label_=nullptr;
+    lv_obj_t* habit_form_=nullptr;
+    lv_obj_t* habit_list_=nullptr;
+    lv_obj_t* habit_detail_=nullptr;
+    int32_t habit_list_scroll_=0,habit_detail_scroll_=0;
+    int32_t habit_scroll_=0;
+    uint32_t habit_sequence_=0,habit_waiting_=0,habit_notice_seen_=0,habit_revision_=0;
+    int64_t habit_banner_until_=0,habit_notice_retry_=0,habit_last_second_=-1;
+    CivilDay habit_last_day_=0;
+    std::vector<HabitId> habit_banner_ids_;
+    std::string habit_message_;
+    View habit_alert_return_=View::Home;
+    std::array<Action,5> habit_notice_actions_{};
+    int habit_focus_index_=0;
     TetrisSnapshot tetris_snapshot_{};
     std::unique_ptr<TetrisRenderer> tetris_renderer_;
     TetrisGesture tetris_gesture_;
@@ -316,49 +328,6 @@ private:
     uint32_t home_frame_count_ = 0;
     lv_timer_t* tick_timer_ = nullptr;
     lv_timer_t* home_animation_timer_ = nullptr;
-    lv_timer_t* hourglass_animation_timer_ = nullptr;
-    lv_timer_t* radar_animation_timer_ = nullptr;
-    std::unique_ptr<RadarRenderer> radar_renderer_;
-    RadarSnapshot radar_snapshot_;
-    std::vector<RadarPoint> radar_points_;
-    std::vector<uint32_t> radar_hits_;
-    bool radar_visible_ = false;
-#ifdef EL_SISTEMA_RADAR_SMOKE
-    bool radar_validation_active_ = false;
-#endif
-    int radar_page_ = 0, radar_size_ = 480;
-    int64_t radar_next_update_ms_ = 0, radar_fps_since_ms_ = 0;
-    uint32_t radar_frames_ = 0;
-    lv_obj_t* radar_status_ = nullptr;
-    lv_obj_t* radar_detail_ = nullptr;
-    lv_obj_t* radar_chart_ = nullptr;
-    lv_chart_series_t* radar_series_ = nullptr;
-    lv_obj_t* radar_pause_button_ = nullptr;
-    lv_obj_t* radar_sound_button_ = nullptr;
-    lv_obj_t* radar_page_label_ = nullptr;
-    std::array<lv_obj_t*, 12> radar_rows_ {};
-    std::array<lv_obj_t*, 3> radar_filter_buttons_ {};
-    std::array<Action*, 12> radar_row_actions_ {};
-    lv_obj_t* hourglass_time_label_ = nullptr;
-    lv_obj_t* hourglass_controls_ = nullptr;
-    lv_obj_t* hourglass_primary_ = nullptr;
-    lv_obj_t* hourglass_error_label_ = nullptr;
-    lv_obj_t* hourglass_duration_roller_ = nullptr;
-    std::unique_ptr<HourglassRenderer> hourglass_renderer_;
-    bool hourglass_controls_open_ = false;
-    bool hourglass_config_from_session_ = false;
-    bool hourglass_start_pending_ = false;
-    uint32_t hourglass_pending_command_ = 0;
-    bool hourglass_visible_ = false;
-    uint16_t hourglass_selected_minutes_ = 25;
-    int hourglass_return_rotation_ = 1;
-    int64_t hourglass_controls_since_us_ = 0;
-    int64_t hourglass_fps_since_us_ = 0;
-    uint32_t hourglass_frames_ = 0;
-    uint32_t hourglass_last_frame_ = UINT32_MAX;
-    uint32_t hourglass_last_generation_ = UINT32_MAX;
-    std::string hourglass_last_time_;
-    std::string hourglass_last_error_;
     // Varias acciones pueden solicitar un redibujado antes de que LVGL ejecute
     // la llamada asincrona. Mantener una sola pendiente evita reconstruir la
     // jerarquia dos veces y liberar objetos que aun estan siendo dibujados.

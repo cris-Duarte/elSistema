@@ -53,12 +53,6 @@ struct DictationSnapshot {
     std::string error;
 };
 
-struct RadarWifiBatch {
-    uint32_t generation = 0, session = 0;
-    std::vector<RadarObservation> observations;
-    std::string error;
-};
-
 class DictationService {
 public:
     DictationService(AudioService& audio, AudioSessionManager& audio_sessions,
@@ -89,9 +83,6 @@ public:
     bool busy() const;
     bool has_audio() const { return snapshot().has_audio; }
     bool play_last_capture();
-    void radar_session(uint32_t session);
-    bool request_radar_scan(uint32_t session);
-    RadarWifiBatch radar_wifi_batch(uint32_t after_generation = 0) const;
     // Estado de red para la barra superior: no inician el Wi-Fi al consultar.
     bool wifi_configured() const { return connectivity_.configured(); }
     bool wifi_connected() const { return connectivity_.connected(); }
@@ -139,8 +130,6 @@ private:
     QueueHandle_t commands_ = nullptr;
     TaskHandle_t task_ = nullptr;
     DictationSnapshot snapshot_;
-    std::atomic<uint32_t> radar_session_ {0}, radar_requested_ {0};
-    RadarWifiBatch radar_batch_;
     AudioBuffer audio_buffer_;
     NetworkCredentials pending_credentials_;
     std::string pending_server_id_;

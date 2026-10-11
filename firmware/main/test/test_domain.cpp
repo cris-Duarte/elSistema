@@ -6,124 +6,66 @@
 #include "services.hpp"
 #include "transcription.hpp"
 #include "home_scene.hpp"
-#include "hourglass_model.hpp"
-#include "hourglass_raster.hpp"
-#include "radar_model.hpp"
-#include "radar_raster.hpp"
 #include "modules.hpp"
 #include "device_state.hpp"
 #include "light_particle.hpp"
 
 #include "unity.h"
 #include "tetris_model.hpp"
-#include "maze_model.hpp"
+#include "habit_model.hpp"
+#include "habit_repository.hpp"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "esp_log.h"
+
+using namespace el_sistema;
+
+TEST_CASE("habitos conservan metas semanales y dias civiles", "[el_sistema][habits]")
+{
+    Habit habit;habit.id=1;habit.name="Ejercicio";habit.start_day=date_day(2026,10,7);
+    habit.goals={{week_start(habit.start_day),5},{date_day(2026,10,12),7}};
+    habit.done={date_day(2026,10,7),date_day(2026,10,9)};
+    TEST_ASSERT_EQUAL(5,weekly_goal(habit,date_day(2026,10,9)));
+    TEST_ASSERT_EQUAL(7,weekly_goal(habit,date_day(2026,10,12)));
+    TEST_ASSERT_EQUAL(2,weekly_done(habit,date_day(2026,10,9)));
+    TEST_ASSERT_EQUAL(date_day(2026,10,5),week_start(date_day(2026,10,11)));
+    CivilDay date=0;TEST_ASSERT_FALSE(parse_day("2026-02-29",date));
+    TEST_ASSERT_TRUE(parse_day("2024-02-29",date));
+}
+
+TEST_CASE("habitos continuos incluyen apagado y rechazan solapamientos", "[el_sistema][habits]")
+{
+    int64_t now=0;TEST_ASSERT_TRUE(parse_datetime("2026-10-09 18:00:00",-180,now));
+    HabitDocument doc;HabitCommand command;command.context={now,-180,true};
+    command.habit.name="Sin fumar";command.habit.kind=HabitKind::Continuous;
+    command.habit.start_day=date_day(2026,10,1);command.start=now-86400;
+    HabitId id=0;std::string error;TEST_ASSERT_TRUE(apply_habit_command(doc,command,id,error));
+    TEST_ASSERT_EQUAL_INT64(2*86400,period_seconds(doc.habits[0].periods[0],{now+86400,-180,true}));
+    TEST_ASSERT_EQUAL_INT64(-1,period_seconds(doc.habits[0].periods[0],{now,-180,false}));
+    command.operation=HabitOperation::Interrupt;command.id=id;command.end=now;
+    TEST_ASSERT_TRUE(apply_habit_command(doc,command,id,error));
+    command.operation=HabitOperation::Resume;command.start=now-1;
+    auto candidate=doc;TEST_ASSERT_FALSE(apply_habit_command(candidate,command,id,error));
+}
+
+TEST_CASE("habitos serializan avisos sin duplicarlos al reiniciar", "[el_sistema][habits]")
+{
+    int64_t now=0;TEST_ASSERT_TRUE(parse_datetime("2026-10-09 18:30:00",-180,now));
+    HabitDocument doc;HabitCommand command;command.context={now,-180,true};
+    command.habit.name="Leer";command.habit.start_day=date_day(2026,10,9);command.habit.notice_enabled=true;command.value=5;
+    HabitId id=0;std::string error;TEST_ASSERT_TRUE(apply_habit_command(doc,command,id,error));
+    TEST_ASSERT_EQUAL(1,pending_habits(doc,command.context,true).size());
+    command.operation=HabitOperation::Announce;command.ids={id};TEST_ASSERT_TRUE(apply_habit_command(doc,command,id,error));
+    std::string json;TEST_ASSERT_TRUE(habit_json_encode(doc,json,error));
+    HabitDocument restored;TEST_ASSERT_TRUE(habit_json_decode(json,restored,error));
+    TEST_ASSERT_TRUE(pending_habits(restored,command.context,true).empty());
+    TEST_ASSERT_EQUAL(1,pending_habits(restored,command.context,false).size());
+}
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <memory>
-
-using namespace el_sistema;
-
-TEST_CASE("Radar distingue emisores y rechaza sesiones caducadas", "[el_sistema][radar]")
-{
-    RadarModel radar;
-    const uint32_t session = radar.begin();
-    RadarObservation first; first.address[5] = 1; first.name = "Red"; first.rssi = -80;
-    TEST_ASSERT_TRUE(radar.observe(session, first, 0));
-    RadarObservation second = first; second.address[5] = 2;
-    TEST_ASSERT_TRUE(radar.observe(session, second, 0));
-    first.rssi = -40; radar.observe(session,first,1000);
-    auto snapshot = radar.snapshot();
-    TEST_ASSERT_EQUAL_UINT32(2,snapshot.emitters.size());
-    TEST_ASSERT_FLOAT_WITHIN(.01f,-70.f,snapshot.emitters[0].smoothed_rssi);
-    radar.select(snapshot.emitters[0].id); radar.expire(61000);
-    TEST_ASSERT_EQUAL_UINT32(1,radar.snapshot().emitters.size());
-    radar.pause(true); radar.pause(false);
-    TEST_ASSERT_FALSE(radar.observe(session,first,62000));
-    TEST_ASSERT_TRUE(radar.observe(radar.snapshot().session,first,62000));
-    radar.end(); TEST_ASSERT_FALSE(radar.observe(radar.snapshot().session,first,63000));
-}
-
-TEST_CASE("Radar grafica solo intensidad y reconoce anuncios BLE", "[el_sistema][radar]")
-{
-    const uint8_t bytes[] = {5,9,'T','a','b','5'};
-    TEST_ASSERT_EQUAL_STRING("Tab5",radar_ble_name(bytes,sizeof(bytes)).c_str());
-    RadarModel radar; const auto session = radar.begin();
-    for (int i=0; i<32; ++i) {
-        RadarObservation observation; observation.address[5]=i;
-        observation.rssi = -35-i*2;
-        radar.observe(session,observation,0);
-    }
-    const auto points = radar_points(radar.snapshot(),15000);
-    TEST_ASSERT_EQUAL_UINT32(24,points.size());
-    TEST_ASSERT_TRUE(points[0].stale);
-    TEST_ASSERT_TRUE(std::hypot(points.front().x,points.front().y) < std::hypot(points.back().x,points.back().y));
-    TEST_ASSERT_FALSE(radar_hit_test(points,points[0].x,points[0].y,.02f).empty());
-}
-
-TEST_CASE("Radar compone 24 luces dentro del presupuesto de frame", "[el_sistema][radar]")
-{
-    RadarRaster raster; TEST_ASSERT_TRUE(raster.init(720));
-    auto* pixels = static_cast<uint16_t*>(heap_caps_malloc(720*720*2,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
-    TEST_ASSERT_NOT_NULL(pixels);
-    std::vector<RadarPoint> points;
-    for (int i=0; i<24; ++i) {
-        const float angle = i*6.2831853f/24;
-        points.push_back({uint32_t(i+1), std::cos(angle)*.7f,std::sin(angle)*.7f,RadarKind::Wifi,false});
-    }
-    const int64_t before = esp_timer_get_time();
-    for (int i=0; i<60; ++i) raster.draw(pixels,points,1,i*.1f);
-    const float mean_ms = (esp_timer_get_time()-before)/60000.f;
-    ESP_LOGI("radar_test","Raster 720x720 / 24 puntos: %.2f ms/frame (sin flush LVGL)",mean_ms);
-    heap_caps_free(pixels);
-    TEST_ASSERT_TRUE(mean_ms < 20.f);
-}
-TEST_CASE("reloj de arena calibra vaciado y conserva sesión al reiniciar", "[el_sistema][hourglass]")
-{
-    HourglassEngine engine;
-    const MotionSample down{.accel_y = 1, .valid = true};
-    TEST_ASSERT_TRUE(engine.start(1, down, 0));
-    engine.step(15000000, down);
-    TEST_ASSERT_FLOAT_WITHIN(0.00001f, 0.75f, engine.snapshot().upper_mass);
-    HourglassSnapshot restored;
-    HourglassRecord record = encode_hourglass(engine.snapshot());
-    TEST_ASSERT_TRUE(decode_hourglass(record, restored));
-    HourglassEngine resumed;
-    resumed.restore(restored, 1000000000);
-    TEST_ASSERT_EQUAL(static_cast<int>(HourglassState::Paused), static_cast<int>(resumed.snapshot().state));
-    resumed.step(2000000000, down);
-    TEST_ASSERT_EQUAL_UINT64(15000000, resumed.snapshot().elapsed_us);
-    record[16] ^= 1;
-    TEST_ASSERT_FALSE(decode_hourglass(record, restored));
-    for (int second = 16; second <= 61; ++second) engine.step(second * 1000000LL, down);
-    TEST_ASSERT_EQUAL(static_cast<int>(HourglassState::Completed), static_cast<int>(engine.snapshot().state));
-}
-
-TEST_CASE("canvas del reloj de arena mantiene presupuesto de composición", "[el_sistema][hourglass][render]")
-{
-    constexpr size_t count = 480 * 1040;
-    auto* pixels = static_cast<uint16_t*>(heap_caps_malloc(count * sizeof(uint16_t), MALLOC_CAP_SPIRAM));
-    TEST_ASSERT_NOT_NULL(pixels);
-    auto raster = std::make_unique<HourglassRaster>();
-    TEST_ASSERT_TRUE(raster->init(480, 1040));
-    HourglassEngine engine;
-    TEST_ASSERT_TRUE(engine.start(1, MotionSample{.accel_y = 1, .valid = true}, 0));
-    engine.step(30000000, MotionSample{.accel_y = 1, .valid = true});
-    auto state = engine.snapshot();
-    const int64_t begin = esp_timer_get_time();
-    for (int frame = 0; frame < 60; ++frame) {
-        state.elapsed_us += 33333;
-        raster->draw(pixels, state);
-    }
-    const float milliseconds = (esp_timer_get_time() - begin) / 60000.0f;
-    heap_caps_free(pixels);
-    ESP_LOGI("hourglass_test", "Composición RGB565 del reloj: %.2f ms/fotograma (sin flush LVGL)", milliseconds);
-    TEST_ASSERT_TRUE_MESSAGE(milliseconds < 25, "El canvas supera el presupuesto necesario para 30 FPS");
-}
 
 TEST_CASE("INA226 conserva todos los bits y estima el porcentaje 2S", "[el_sistema][power]")
 {
@@ -261,10 +203,14 @@ TEST_CASE("el modelo localiza misiones por identificador estable", "[el_sistema]
 TEST_CASE("el registro expone los cuatro modulos", "[el_sistema][home]")
 {
     TEST_ASSERT_EQUAL_UINT32(4, kModules.size());
+    TEST_ASSERT_NOT_NULL(find_module(ModuleId::Habits));
+    TEST_ASSERT_EQUAL_UINT8(6, static_cast<uint8_t>(ModuleId::Habits));
     TEST_ASSERT_NOT_NULL(find_module(ModuleId::Productivity));
     TEST_ASSERT_NOT_NULL(find_module(ModuleId::Assistant));
-    TEST_ASSERT_NOT_NULL(find_module(ModuleId::Hourglass));
-    TEST_ASSERT_NOT_NULL(find_module(ModuleId::Radar));
+    TEST_ASSERT_NOT_NULL(find_module(ModuleId::Tetris));
+    TEST_ASSERT_NULL(find_module(static_cast<ModuleId>(2)));
+    TEST_ASSERT_NULL(find_module(static_cast<ModuleId>(3)));
+    TEST_ASSERT_NULL(find_module(static_cast<ModuleId>(5)));
     TEST_ASSERT_NULL(find_module(static_cast<ModuleId>(99)));
 }
 
@@ -458,15 +404,15 @@ TEST_CASE("el árbitro de audio permite un único propietario", "[el_sistema][au
     TEST_ASSERT_EQUAL(static_cast<int>(AudioSessionOwner::DictationCapture),
                       static_cast<int>(sessions.owner()));
     TEST_ASSERT_FALSE(sessions.try_acquire(AudioSessionOwner::AssistantPlayback));
-    TEST_ASSERT_FALSE(sessions.try_acquire(AudioSessionOwner::Radar));
+    TEST_ASSERT_FALSE(sessions.try_acquire(AudioSessionOwner::Tetris));
     sessions.release(AudioSessionOwner::AssistantPlayback);
     TEST_ASSERT_TRUE(sessions.busy());
     sessions.release(AudioSessionOwner::DictationCapture);
     TEST_ASSERT_FALSE(sessions.busy());
-    TEST_ASSERT_TRUE(sessions.try_acquire(AudioSessionOwner::Radar));
+    TEST_ASSERT_TRUE(sessions.try_acquire(AudioSessionOwner::Tetris));
     TEST_ASSERT_FALSE(sessions.try_acquire(AudioSessionOwner::AssistantCapture));
-    TEST_ASSERT_TRUE(sessions.radar_cancel_requested().load());
-    sessions.release(AudioSessionOwner::Radar);
+    TEST_ASSERT_TRUE(sessions.tetris_cancel_requested().load());
+    sessions.release(AudioSessionOwner::Tetris);
     {
         AudioSessionLease lease(sessions, AudioSessionOwner::Reminder);
         TEST_ASSERT_TRUE(lease.acquired());
@@ -486,28 +432,6 @@ TEST_CASE("Tetris cede el audio a voces y no interrumpe su captura", "[el_sistem
     sessions.release(AudioSessionOwner::DictationCapture);
     AudioSessionLease lease(sessions, AudioSessionOwner::Tetris);
     TEST_ASSERT_TRUE(lease.acquired());
-}
-
-TEST_CASE("Laberinto calibra y pausa sin contar tiempo fuera del módulo", "[el_sistema][maze]")
-{
-    MazeEngine game;
-    MotionSample motion{}; motion.valid=true; motion.accel_z=1;
-    int64_t now=1000; game.start(now,motion);
-    for(int i=0;i<30;++i) {now+=20000;game.step(now,motion);}
-    TEST_ASSERT_EQUAL(static_cast<int>(MazeState::Running),static_cast<int>(game.snapshot().state));
-    game.step(now+=20000,motion);
-    TEST_ASSERT_EQUAL_UINT32(20,game.snapshot().elapsed_ms);
-    game.pause(now);game.step(now+=5000000,motion);
-    TEST_ASSERT_EQUAL_UINT32(20,game.snapshot().elapsed_ms);
-    game.resume(now,motion);game.step(now+=20000,motion);
-    TEST_ASSERT_EQUAL_UINT32(40,game.snapshot().elapsed_ms);
-    motion.valid=false;game.step(now+=20000,motion);
-    TEST_ASSERT_EQUAL(static_cast<int>(MazeState::Paused),static_cast<int>(game.snapshot().state));
-    TEST_ASSERT_EQUAL(static_cast<int>(MazeError::Sensor),static_cast<int>(game.snapshot().error));
-    auto record=encode_maze_preferences(game.snapshot());
-    unsigned level=0;std::array<uint32_t,MAZE_LEVELS> best{};
-    TEST_ASSERT_TRUE(decode_maze_preferences(record,level,best));
-    record[8]^=1;TEST_ASSERT_FALSE(decode_maze_preferences(record,level,best));
 }
 
 TEST_CASE("Tetris conserva pausa, temporización, CRC y gestos", "[el_sistema][tetris]")

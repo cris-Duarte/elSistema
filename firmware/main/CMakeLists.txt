@@ -12,23 +12,17 @@ idf_component_register(
         "connectivity.cpp"
         "dictation.cpp"
         "hardware.cpp"
-        "hourglass.cpp"
-        "hourglass_model.cpp"
-        "hourglass_repository.cpp"
-        "hourglass_raster.cpp"
-        "hourglass_renderer.cpp"
+        "habit_model.cpp"
+        "habit_calendar.cpp"
+        "habit_json.cpp"
+        "habit_repository.cpp"
+        "habits.cpp"
+        "ui_habits.cpp"
         "home_scene.cpp"
         "home_renderer.cpp"
         "m5_platform.cpp"
-        "maze.cpp"
-        "maze_model.cpp"
-        "maze_renderer.cpp"
         "model.cpp"
         "repository.cpp"
-        "radar.cpp"
-        "radar_model.cpp"
-        "radar_raster.cpp"
-        "radar_renderer.cpp"
         "services.cpp"
         "transcription.cpp"
         "tetris.cpp"
@@ -37,7 +31,6 @@ idf_component_register(
         "tetris_renderer.cpp"
         "tetris_sound.cpp"
         "ui_tetris.cpp"
-        "ui_maze.cpp"
         "ui.cpp"
         "assets/assistant_character.c"
         "assets/assistant_character_data.c"
@@ -52,7 +45,7 @@ idf_component_register(
              esp_event esp_http_client esp_netif esp_wifi espressif__esp_hosted espressif__esp_wifi_remote heap
              espressif__mdns bt
     PRIV_REQUIRES unity
-    EMBED_FILES "assets/assistant_ack.pcm"
+    EMBED_FILES "assets/assistant_ack.pcm" "assets/habits_notice.pcm"
 )
 
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-missing-field-initializers)
@@ -66,7 +59,4 @@ target_link_options(${COMPONENT_LIB} INTERFACE
 
 if(EL_SISTEMA_TESTS)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE EL_SISTEMA_RUN_TESTS=1)
-    if(EL_SISTEMA_RADAR_SMOKE)
-        target_compile_definitions(${COMPONENT_LIB} PRIVATE EL_SISTEMA_RADAR_SMOKE=1)
-    endif()
 endif()

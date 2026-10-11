@@ -211,7 +211,7 @@ bool OrientationService::init(i2c_master_bus_handle_t bus)
         ESP_LOGW(TAG, "No se pudo crear la tarea de movimiento BMI270");
         return false;
     }
-    ESP_LOGI(TAG, "BMI270 M5Unified listo: ±8 g, muestras 50 Hz en Inicio y reloj de arena");
+    ESP_LOGI(TAG, "BMI270 M5Unified listo: ±8 g, muestras 50 Hz en Inicio");
     return true;
 }
 

@@ -169,7 +169,8 @@ static void random_and_audio() {
         assert(std::any_of(std::begin(pcm),std::end(pcm),[](int16_t v){return v!=0;}));
         for(auto v:pcm) assert(v<32000&&v>-32000);
     }
-    assert(kModules.size()==6&&find_module(ModuleId::Tetris)&&find_module(ModuleId::Maze));
+    for (int removed : {2,3,5}) assert(!find_module(static_cast<ModuleId>(removed)));
+    assert(kModules.size()==4&&find_module(ModuleId::Productivity)&&find_module(ModuleId::Assistant)&&find_module(ModuleId::Tetris)&&find_module(ModuleId::Habits));
 }
 int main() {
     for(int columns:{10,12}) {pieces_and_collisions(columns);clearing_and_score(columns);}

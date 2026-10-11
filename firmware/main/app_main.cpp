@@ -1,6 +1,4 @@
 #include "hardware.hpp"
-#include "hourglass.hpp"
-#include "radar.hpp"
 #include "m5_platform.hpp"
 #include "assistant.hpp"
 #include "assistant_voice.hpp"
@@ -88,59 +86,20 @@ el_sistema::AppState state;
 el_sistema::MissionRepository repository;
 el_sistema::ClockService clock_service;
 el_sistema::OrientationService orientation_service;
-el_sistema::HourglassService hourglass_service(orientation_service);
-el_sistema::MazeService maze_service(orientation_service);
 el_sistema::ButtonService button_service;
 el_sistema::PowerService power_service;
 el_sistema::AssistantService assistant_service;
 el_sistema::AudioService audio_service;
 el_sistema::AudioSessionManager audio_sessions;
 el_sistema::TetrisService tetris_service(audio_service, audio_sessions);
+el_sistema::HabitService habit_service(audio_service, audio_sessions);
 el_sistema::ConnectivityService connectivity_service;
 el_sistema::BleService ble_service;
 el_sistema::TranscriptionService transcription_service;
 std::unique_ptr<el_sistema::DictationService> dictation_service;
-std::unique_ptr<el_sistema::RadarService> radar_service;
 std::unique_ptr<el_sistema::AssistantVoiceService> assistant_voice_service;
 std::unique_ptr<el_sistema::ApplicationService> application;
 std::unique_ptr<el_sistema::AppUi> ui;
-
-#ifdef EL_SISTEMA_RADAR_SMOKE
-void radar_smoke_task(void*)
-{
-    for (int i = 0; i < 120; ++i) {
-        const auto phase = ble_service.snapshot().phase;
-        if (phase == el_sistema::BlePhase::Advertising || phase == el_sistema::BlePhase::Connected) break;
-        vTaskDelay(pdMS_TO_TICKS(500));
-    }
-    const bool connected_before = connectivity_service.connected();
-    if (bsp_display_lock(1000)) { ui->radar_validation_view(true); bsp_display_unlock(); }
-    ESP_LOGI(TAG, "Radar smoke: iniciando observación real durante 30 s");
-    for (int i = 0; i < 6; ++i) {
-        vTaskDelay(pdMS_TO_TICKS(5000));
-        const auto snapshot = radar_service->snapshot();
-        size_t wifi = 0, ble = 0;
-        for (const auto& emitter : snapshot.emitters) {
-            if (emitter.observation.kind == el_sistema::RadarKind::Wifi) ++wifi; else ++ble;
-        }
-        ESP_LOGI(TAG, "Radar smoke: Wi-Fi=%u BLE=%u conectado=%d; %s; %s",
-                 static_cast<unsigned>(wifi), static_cast<unsigned>(ble), connectivity_service.connected(),
-                 snapshot.wifi_status.c_str(), snapshot.ble_status.c_str());
-        if (!snapshot.emitters.empty() && !snapshot.selected_id) radar_service->select(snapshot.emitters.front().id);
-        if (i == 2 && bsp_display_lock(1000)) {
-            ui->radar_validation_view(true, 0); bsp_display_unlock();
-            ESP_LOGI(TAG, "Radar smoke: comprobando composición vertical 720x1280");
-        }
-    }
-    if (bsp_display_lock(1000)) { ui->radar_validation_view(false); bsp_display_unlock(); }
-    vTaskDelay(pdMS_TO_TICKS(2000));
-    const auto stopped = radar_service->snapshot();
-    ESP_LOGI(TAG, "Radar smoke: salida active=%d BLE_scan=%d; conexión previa=%d actual=%d; heap interno=%lu",
-             stopped.active, ble_service.observation_active(), connected_before, connectivity_service.connected(),
-             static_cast<unsigned long>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
-    vTaskDelete(nullptr);
-}
-#endif
 
 lv_display_t* start_display()
 {
@@ -208,14 +167,12 @@ extern "C" void app_main(void)
     if (!restored) application->seed_first_run();
 
     lv_display_t* display = start_display();
-    hourglass_service.init();
     if (!tetris_service.init()) ESP_LOGE(TAG, "No se pudo iniciar Tetris");
-    if (!maze_service.init()) ESP_LOGE(TAG, "No se pudo iniciar Laberinto");
-    radar_service = std::make_unique<el_sistema::RadarService>(*dictation_service, ble_service, audio_service, audio_sessions);
-    if (!radar_service->init()) ESP_LOGE(TAG, "No se pudo iniciar Radar");
+    habit_service.clock_context({clock_service.now_utc(),state.settings.utc_offset_minutes,clock_service.is_valid()});
+    if (!habit_service.init()) ESP_LOGE(TAG, "No se pudo iniciar Hábitos");
     ui = std::make_unique<el_sistema::AppUi>(state, *application, repository, clock_service, orientation_service,
                                              button_service, *dictation_service, power_service, assistant_service,
-                                            *assistant_voice_service, hourglass_service, *radar_service, tetris_service, maze_service);
+                                            *assistant_voice_service, tetris_service, habit_service);
     bsp_display_lock(0);
     ui->start(display);
     bsp_display_unlock();
@@ -223,9 +180,6 @@ extern "C" void app_main(void)
     // El enlace P4-C6 y los escaneos pueden tardar varios segundos. Arrancan
     // únicamente cuando LVGL ya mostró la interfaz y siempre en el worker.
     dictation_service->start_connectivity();
-#ifdef EL_SISTEMA_RADAR_SMOKE
-    xTaskCreate(radar_smoke_task, "radar_smoke", 12288, nullptr, 2, nullptr);
-#endif
 
     ESP_LOGI(TAG, "Interfaz y servicios listos");
 }

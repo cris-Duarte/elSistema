@@ -28,6 +28,14 @@ constexpr uint32_t DangerSoft = 0x3A1524;
 constexpr uint32_t Gold = 0xFFC24B;  // solo logros mayores
 constexpr uint32_t Scrim = 0x000000;  // velo bajo los dialogos
 
+// Hábitos: papel, tinta y señales de cumplimiento; no hereda el HUD/neón.
+constexpr uint32_t HabitPaper = 0xF5F1E8;
+constexpr uint32_t HabitSheet = 0xFFFCF5;
+constexpr uint32_t HabitInk = 0x172020;
+constexpr uint32_t HabitGreen = 0x287A59;
+constexpr uint32_t HabitBlue = 0x245FA8;
+constexpr uint32_t HabitMuted = 0x58615C;
+
 // Inicio: negro puro y partículas de luz. Conserva iconos compactos de teléfono,
 // sin trasladar sus halos al HUD de Productividad o Asistente.
 constexpr uint32_t HomeBackground = 0x000000;
@@ -46,13 +54,6 @@ constexpr uint32_t HomeParticleLime = 0xFFE6AD; // luz cálida, no verde neón
 constexpr uint32_t HomeParticleRose = 0xFFD0E8;
 constexpr uint32_t HomeParticleLavender = 0xD9D0FF;
 
-// Reloj de arena: material luminoso dorado, contexto independiente del HUD.
-constexpr uint32_t HourglassGold = 0xFFD279;
-constexpr uint32_t HourglassAmber = 0xDB922C;
-constexpr uint32_t HourglassCore = 0xFFF5D5;
-constexpr uint32_t HourglassGlass = 0x596676;
-constexpr uint32_t HourglassReflection = 0xBBC8D8;
-constexpr uint32_t HourglassFrame = 0x9F753C;
 
 // --- Texto ---
 constexpr uint32_t TextPrimary = 0xE8F2FF;
