@@ -1,3 +1,5 @@
 .DS_Store
 .openai/
 dist/
+backups/
+factory/

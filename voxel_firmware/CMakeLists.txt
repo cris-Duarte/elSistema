@@ -1,0 +1,10 @@
+cmake_minimum_required(VERSION 3.16)
+set(IDF_TARGET esp32p4)
+set(SDKCONFIG "${CMAKE_BINARY_DIR}/sdkconfig" CACHE FILEPATH "Configuracion de este build")
+if(NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/components/M5GFX/CMakeLists.txt" OR
+   NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/components/M5Unified/CMakeLists.txt")
+    message(FATAL_ERROR "Ejecuta python3 tools/prepare_idf.py antes de compilar con ESP-IDF")
+endif()
+set(PROJECT_VER "0.1.1")
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(tab5_voxel)

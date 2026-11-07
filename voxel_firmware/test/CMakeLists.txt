@@ -1,0 +1,23 @@
+cmake_minimum_required(VERSION 3.16)
+project(voxel_host LANGUAGES CXX)
+enable_testing()
+option(VOXEL_SANITIZE "ASan y UBSan" ON)
+option(VOXEL_QUALITY "Probar perfil 256x144" OFF)
+add_executable(voxel_tests test_main.cpp
+    ../src/World.cpp ../src/Terrain.cpp ../src/Camera.cpp ../src/Raycast.cpp
+    ../src/Renderer.cpp ../src/Player.cpp ../src/Input.cpp ../src/Game.cpp
+    ../src/Scale.cpp ../src/Hud.cpp ../src/Benchmark.cpp)
+target_include_directories(voxel_tests PRIVATE ../include)
+target_compile_features(voxel_tests PRIVATE cxx_std_17)
+target_compile_definitions(voxel_tests PRIVATE VOXEL_TEST_ALLOCATOR=1)
+target_compile_options(voxel_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+if(VOXEL_QUALITY)
+    target_compile_definitions(voxel_tests PRIVATE VOXEL_WIDTH=256 VOXEL_HEIGHT=144)
+endif()
+if(VOXEL_SANITIZE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(voxel_tests PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+    target_link_options(voxel_tests PRIVATE -fsanitize=address,undefined)
+endif()
+add_test(NAME voxel_core COMMAND voxel_tests)
+find_package(Python3 3.9 COMPONENTS Interpreter REQUIRED)
+add_test(NAME benchmark_tools COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_benchmark_tools.py)

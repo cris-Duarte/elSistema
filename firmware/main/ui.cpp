@@ -278,10 +278,10 @@ constexpr int kStatusBarHeight = 48;
 AppUi::AppUi(AppState& state, ApplicationService& service, MissionRepository& repository, ClockService& clock,
              OrientationService& orientation, ButtonService& button, DictationService& dictation,
              PowerService& power, AssistantService& assistant, AssistantVoiceService& assistant_voice,
-             TetrisService& tetris, HabitService& habits)
+             TetrisService& tetris, HabitService& habits, CameraService& camera)
     : state_(state), service_(service), repository_(repository), clock_(clock), orientation_(orientation),
       button_(button), dictation_(dictation), power_(power), assistant_(assistant), assistant_voice_(assistant_voice),
-      tetris_(tetris), habits_(habits)
+      tetris_(tetris), habits_(habits), camera_(camera)
 {
 }
 
@@ -414,6 +414,7 @@ void AppUi::render()
     tetris_gesture_.cancel();
     tetris_.soft_drop(false);
     if (tetris_timer_) { lv_timer_delete(tetris_timer_); tetris_timer_ = nullptr; }
+    if (camera_timer_) { lv_timer_delete(camera_timer_); camera_timer_ = nullptr; }
     const bool should_run_home_motion = view_ == View::Home && !screen_off_;
     const bool should_run_motion = should_run_home_motion;
     cancel_home_rotation(); // No animation may retain objects being deleted.
@@ -431,6 +432,12 @@ void AppUi::render()
     home_header_group_ = nullptr;
     home_modules_group_ = nullptr;
     lv_obj_clean(screen_);
+    // Detach LVGL's source and cache before the worker may recycle/free RGB data.
+    camera_image_ = nullptr;
+    release_camera_frame();
+    camera_cover_ = camera_state_label_ = camera_error_label_ = camera_controls_ = nullptr;
+    camera_metrics_ = camera_connection_ = camera_formats_ = nullptr;
+    camera_.set_visible(view_ == View::Camera && !screen_off_);
     habit_calendar_.reset();
     tetris_renderer_.reset();
     tetris_score_ = tetris_level_ = tetris_record_ = tetris_notice_ = nullptr;
@@ -477,7 +484,7 @@ void AppUi::render()
     assistant_level_bar_ = nullptr;
 
     const bool home = view_ == View::Home && !screen_off_;
-    lv_obj_set_style_bg_color(screen_, color(habit_view() ? theme::HabitPaper : home || view_ == View::Tetris ? theme::HomeBackground : BG), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(screen_, color(habit_view() ? theme::HabitPaper : home || view_ == View::Tetris || view_ == View::Camera ? theme::HomeBackground : BG), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(screen_, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_text_font(screen_, &FONT_BODY, LV_PART_MAIN);
 
@@ -493,6 +500,7 @@ void AppUi::render()
     switch (view_) {
         case View::Home: render_home(); break;
         case View::Tetris: render_tetris(); break;
+        case View::Camera: render_camera(); break;
         case View::Dashboard: render_dashboard(); break;
         case View::Assistant: render_assistant(); break;
         case View::History: render_history(); break;
@@ -508,7 +516,7 @@ void AppUi::render()
     }
     if (overlay_ != Overlay::None) render_overlay();
     // La barra va la última para que ningún panel ni diálogo la tape.
-    if (view_ != View::Tetris) render_statusbar();
+    if (view_ != View::Tetris && view_ != View::Camera) render_statusbar();
     render_habit_banner();
     if (home_rotation_pending_ && view_ == View::Home && overlay_ == Overlay::None && !screen_off_) {
         start_home_rotation();
@@ -724,6 +732,7 @@ void AppUi::render_home()
                       (static_cast<int>(index) % module_columns) * (module_cell_width + 12);
         const uint32_t accent = module.id == ModuleId::Productivity ? theme::HomeBlue :
                                 module.id == ModuleId::Habits ? 0x68B78C :
+                                module.id == ModuleId::Camera ? 0xA5C2D1 :
                                 module.id == ModuleId::Tetris ? 0xB979FF : theme::HomeCanary;
 
         lv_obj_t* cell = lv_button_create(home_modules_group_);
@@ -785,6 +794,11 @@ void AppUi::render_home()
             shape(19,9,3,10,true,0); shape(36,9,3,10,true,0);
             for(int row=0;row<2;++row) for(int col=0;col<3;++col)
                 shape(18+col*9,26+row*9,5,5,true,0);
+        } else if (module.id == ModuleId::Camera) {
+            shape(10, 20, 38, 26, false, 4);
+            shape(17, 13, 15, 8, true, 2);
+            shape(23, 25, 14, 14, false, LV_RADIUS_CIRCLE);
+            shape(40, 25, 3, 3, true, 1);
         } else if (module.id == ModuleId::Tetris) {
             shape(14, 14, 9, 9, true, 0);
             shape(24, 14, 9, 9, true, 0);
@@ -2325,12 +2339,27 @@ void AppUi::dispatch(const Action& action)
             break;
         case ActionCode::GoHome:
             if (view_ == View::Tetris) leave_tetris();
+            if (view_ == View::Camera) leave_camera();
             if (view_ == View::Assistant) {
                 assistant_voice_.cancel();
                 assistant_.close(static_cast<uint64_t>(esp_timer_get_time() / 1000));
             }
             overlay_ = Overlay::None;
             view_ = View::Home;
+            break;
+        case ActionCode::CameraRetry:
+            camera_.retry();
+            camera_controls_until_ = esp_timer_get_time() + 5000000;
+            break;
+        case ActionCode::CameraConnection:
+            camera_details_ = !camera_details_;
+            camera_controls_until_ = esp_timer_get_time() + 5000000;
+            break;
+        case ActionCode::CameraHideControls:
+            camera_details_ = false;
+            camera_controls_until_ = 0;
+            rerender = false;
+            update_camera();
             break;
         case ActionCode::TetrisNew:
             if (tetris_snapshot_.state == TetrisState::Paused || tetris_snapshot_.state == TetrisState::Running) {
@@ -2823,7 +2852,7 @@ void AppUi::tick()
     update_habit_notices();
     const bool rotation_locked = habit_critical() || (view_==View::HabitAlerts && habit_alert_return_==View::Tetris) ||
                                  view_ == View::Editor || view_ == View::SearchEditor || view_ == View::ClockSetup ||
-                                 view_ == View::DictationSetup || view_ == View::Tetris || overlay_ != Overlay::None || screen_off_ ||
+                                 view_ == View::DictationSetup || view_ == View::Tetris || view_ == View::Camera || overlay_ != Overlay::None || screen_off_ ||
                                  dictation_.busy() || assistant_voice_.busy() || home_rotation_active_ || render_pending_;
     const int next = orientation_.poll();
     if (!rotation_locked) {
@@ -2885,6 +2914,15 @@ void AppUi::open_module(ModuleId module)
     const ModuleDescriptor* descriptor = find_module(module);
     if (descriptor == nullptr) return;
     overlay_ = Overlay::None;
+    if (module == ModuleId::Camera) {
+        camera_return_rotation_ = current_rotation_;
+        current_rotation_ = 1; orientation_.set_current(1);
+        lv_display_set_rotation(display_, LV_DISPLAY_ROTATION_90);
+        home_rotation_pending_ = false;
+        camera_details_ = false;
+        camera_controls_until_ = esp_timer_get_time() + 5000000;
+        view_ = View::Camera; return;
+    }
     if(module==ModuleId::Habits) {view_=View::Habits;habit_message_.clear();return;}
     if (module == ModuleId::Tetris) {
         tetris_return_rotation_ = current_rotation_;
@@ -2944,6 +2982,7 @@ void AppUi::set_screen_off(bool off)
 {
     if(habit_critical()) capture_habit_fields();
     if (off && view_ == View::Tetris) { tetris_.set_visible(false); tetris_gesture_.cancel(); }
+    if (off && view_ == View::Camera) camera_.set_visible(false);
     screen_off_ = off;
     bsp_display_brightness_set(off ? 0 : 72);
     ESP_LOGI(TAG_UI, "Pantalla %s", off ? "apagada" : "encendida");
@@ -2954,6 +2993,7 @@ void AppUi::power_off_device()
 {
     ESP_LOGW(TAG_UI, "Apagando el equipo");
     tetris_.set_visible(false);
+    camera_.set_visible(false);
     service_.save();
     bsp_display_brightness_set(0);
     vTaskDelay(pdMS_TO_TICKS(150));

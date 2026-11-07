@@ -200,9 +200,11 @@ TEST_CASE("el modelo localiza misiones por identificador estable", "[el_sistema]
     TEST_ASSERT_NULL(find_mission(state, 8));
 }
 
-TEST_CASE("el registro expone los cuatro modulos", "[el_sistema][home]")
+TEST_CASE("el registro expone cinco modulos y reserva identificadores retirados", "[el_sistema][home]")
 {
-    TEST_ASSERT_EQUAL_UINT32(4, kModules.size());
+    TEST_ASSERT_EQUAL_UINT32(5, kModules.size());
+    TEST_ASSERT_NOT_NULL(find_module(ModuleId::Camera));
+    TEST_ASSERT_EQUAL_UINT8(10, static_cast<uint8_t>(ModuleId::Camera));
     TEST_ASSERT_NOT_NULL(find_module(ModuleId::Habits));
     TEST_ASSERT_EQUAL_UINT8(6, static_cast<uint8_t>(ModuleId::Habits));
     TEST_ASSERT_NOT_NULL(find_module(ModuleId::Productivity));
@@ -211,6 +213,9 @@ TEST_CASE("el registro expone los cuatro modulos", "[el_sistema][home]")
     TEST_ASSERT_NULL(find_module(static_cast<ModuleId>(2)));
     TEST_ASSERT_NULL(find_module(static_cast<ModuleId>(3)));
     TEST_ASSERT_NULL(find_module(static_cast<ModuleId>(5)));
+    TEST_ASSERT_NULL(find_module(static_cast<ModuleId>(7)));
+    TEST_ASSERT_NULL(find_module(static_cast<ModuleId>(8)));
+    TEST_ASSERT_NULL(find_module(static_cast<ModuleId>(9)));
     TEST_ASSERT_NULL(find_module(static_cast<ModuleId>(99)));
 }
 

@@ -8,3 +8,5 @@ dependencies:
   espressif/esp_hosted: "=1.4.1"
   # Descubrimiento automático del MacBook que anuncia whisper-server.
   espressif/mdns: "=1.13.1"
+  # Monitor USB: retain IDF 5.4.2 and its built-in USB Host library.
+  espressif/usb_host_uvc: "=2.6.0"

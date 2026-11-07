@@ -4,6 +4,7 @@
 #include "home_scene.hpp"
 #include "home_renderer.hpp"
 #include "tetris.hpp"
+#include "camera.hpp"
 #include "habits.hpp"
 #include "habit_calendar.hpp"
 #include "tetris_renderer.hpp"
@@ -31,12 +32,12 @@ public:
     AppUi(AppState& state, ApplicationService& service, MissionRepository& repository, ClockService& clock,
           OrientationService& orientation, ButtonService& button, DictationService& dictation,
           PowerService& power, AssistantService& assistant, AssistantVoiceService& assistant_voice,
-          TetrisService& tetris, HabitService& habits);
+          TetrisService& tetris, HabitService& habits, CameraService& camera);
     void start(lv_display_t* display);
 
 private:
     enum class View { Home, Dashboard, Assistant, History, Editor, ClockSetup, SearchEditor, DictationSetup,
-                      Tetris, Habits, HabitDetail, HabitEditor, HabitPeriod, HabitSettings, HabitAlerts };
+                      Tetris, Habits, HabitDetail, HabitEditor, HabitPeriod, HabitSettings, HabitAlerts, Camera };
     enum class Overlay { None, Tutorial, Reward, Reminder, ConfirmDelete, ConfirmForgetNetwork, MissionDetail, Info,
                          Dictation, ConfirmDictationReplace, ConfirmTetrisNew, HabitDelete, HabitInterrupt };
     enum class KeyboardPage { Letters, Numbers, Symbols };
@@ -124,6 +125,7 @@ private:
         HabitNoticeToggle, HabitNoticeMode, HabitField, HabitAskDelete, HabitDelete,
         HabitPeriodOpen, HabitPeriodSave, HabitInterruptConfirm, HabitSettings,
         HabitVolume, HabitTest, HabitPending, HabitSnooze, HabitOmit, HabitClock,
+        CameraRetry, CameraConnection, CameraHideControls,
     };
 
     struct Action {
@@ -169,6 +171,12 @@ private:
     lv_obj_t* habit_field(lv_obj_t* parent,int index,const char* caption,int y,int width,bool multiline=false);
     HabitContext habit_context() const;
     void render_tetris();
+    void render_camera();
+    void update_camera();
+    void release_camera_frame();
+    void leave_camera();
+    static void camera_timer_callback(lv_timer_t* timer);
+    static void camera_touch_callback(lv_event_t* event);
     void update_tetris();
     void leave_tetris();
     static void tetris_touch_callback(lv_event_t* event);
@@ -243,6 +251,25 @@ private:
     AssistantVoiceService& assistant_voice_;
     TetrisService& tetris_;
     HabitService& habits_;
+    CameraService& camera_;
+    CameraSnapshot camera_snapshot_{};
+    CameraFrame camera_frame_{};
+    std::array<lv_image_dsc_t,2> camera_images_{};
+    lv_timer_t* camera_timer_ = nullptr;
+    lv_obj_t* camera_image_ = nullptr;
+    lv_obj_t* camera_cover_ = nullptr;
+    lv_obj_t* camera_state_label_ = nullptr;
+    lv_obj_t* camera_error_label_ = nullptr;
+    lv_obj_t* camera_controls_ = nullptr;
+    lv_obj_t* camera_metrics_ = nullptr;
+    lv_obj_t* camera_connection_ = nullptr;
+    lv_obj_t* camera_formats_ = nullptr;
+    bool camera_details_ = false;
+    int camera_return_rotation_ = 1;
+    int64_t camera_controls_until_ = 0, camera_metrics_at_ = 0;
+    int64_t camera_present_since_ = 0;
+    uint32_t camera_presented_ = 0;
+    float camera_present_fps_ = 0;
     HabitSnapshot habits_snapshot_;
     std::unique_ptr<HabitCalendar> habit_calendar_;
     HabitId habit_selected_=0, habit_editing_=0;

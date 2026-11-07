@@ -10,6 +10,7 @@
 #include "transcription.hpp"
 #include "model.hpp"
 #include "repository.hpp"
+#include "retired_storage.hpp"
 #include "services.hpp"
 #include "ui.hpp"
 
@@ -93,6 +94,7 @@ el_sistema::AudioService audio_service;
 el_sistema::AudioSessionManager audio_sessions;
 el_sistema::TetrisService tetris_service(audio_service, audio_sessions);
 el_sistema::HabitService habit_service(audio_service, audio_sessions);
+el_sistema::CameraService camera_service;
 el_sistema::ConnectivityService connectivity_service;
 el_sistema::BleService ble_service;
 el_sistema::TranscriptionService transcription_service;
@@ -138,6 +140,9 @@ extern "C" void app_main(void)
 
     if (!repository.init()) {
         ESP_LOGE(TAG, "No se pudo preparar el almacenamiento: %s", repository.last_error());
+    } else {
+        const auto cleanup = el_sistema::clear_retired_module_storage();
+        if (cleanup != ESP_OK) ESP_LOGW(TAG,"Limpieza de datos retirados pendiente: %s",esp_err_to_name(cleanup));
     }
     const bool restored = repository.load(state);
 
@@ -170,9 +175,10 @@ extern "C" void app_main(void)
     if (!tetris_service.init()) ESP_LOGE(TAG, "No se pudo iniciar Tetris");
     habit_service.clock_context({clock_service.now_utc(),state.settings.utc_offset_minutes,clock_service.is_valid()});
     if (!habit_service.init()) ESP_LOGE(TAG, "No se pudo iniciar Hábitos");
+    if (!camera_service.init()) ESP_LOGE(TAG, "No se pudo iniciar Cámara");
     ui = std::make_unique<el_sistema::AppUi>(state, *application, repository, clock_service, orientation_service,
                                              button_service, *dictation_service, power_service, assistant_service,
-                                            *assistant_voice_service, tetris_service, habit_service);
+                                            *assistant_voice_service, tetris_service, habit_service, camera_service);
     bsp_display_lock(0);
     ui->start(display);
     bsp_display_unlock();

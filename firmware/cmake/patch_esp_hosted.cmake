@@ -25,6 +25,19 @@ endfunction()
 function(el_sistema_patch_esp_hosted HOSTED_DIR)
     set(HOST_INIT "${HOSTED_DIR}/host/esp_hosted_host_init.c")
     set(HOST_API "${HOSTED_DIR}/host/api/src/esp_hosted_api.c")
+    # SDMMC slot 0 belongs to microSD; Hosted must only release its own slot 1.
+    el_sistema_replace_or_verify("${HOSTED_DIR}/host/port/src/sdio_wrapper.c"
+        "sdmmc_host_deinit();"
+        "sdmmc_host_deinit_slot(context->config.slot); /* El Sistema: preserve microSD slot. */"
+        "El Sistema: preserve microSD slot.")
+    el_sistema_replace_or_verify("${HOSTED_DIR}/host/port/src/sdio_wrapper.c"
+        "HOSTED_FREE(card);"
+        "HOSTED_FREE(card); context->card = NULL; /* El Sistema: clear released card. */"
+        "El Sistema: clear released card.")
+    el_sistema_replace_or_verify("${HOSTED_DIR}/host/port/src/sdio_wrapper.c"
+        "HOSTED_FREE(context->card);"
+        "HOSTED_FREE(context->card); context->card = NULL; /* El Sistema: clear failed card. */"
+        "El Sistema: clear failed card.")
 
     # El componente original inicializa SDIO desde un constructor anterior a
     # app_main. Se difiere hasta que el usuario solicita Wi-Fi, de modo que una

@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.16)
+set(IDF_TARGET esp32p4)
+set(ENV{ESP_IDF_VERSION} "5.4")
+set(PROJECT_VER "0.1.0")
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(piensaware)
+include("${CMAKE_CURRENT_LIST_DIR}/cmake/patch_esp_hosted.cmake")
+el_sistema_patch_esp_hosted("${CMAKE_CURRENT_LIST_DIR}/managed_components/espressif__esp_hosted")

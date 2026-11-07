@@ -44,7 +44,10 @@ HabitId create(HabitDocument &doc, HabitKind kind, const char *name = "Ejercicio
     return id;
 }
 void calendar() {
-    check(static_cast<int>(ModuleId::Habits) == 6 && kModules.size() == 4);
+    check(static_cast<int>(ModuleId::Habits) == 6 && kModules.size() == 5);
+    check(!find_module(static_cast<ModuleId>(7)));
+    check(!find_module(static_cast<ModuleId>(8)));
+    check(!find_module(static_cast<ModuleId>(9)));
     for (int y = 1970; y <= 2199; ++y)
         for (int month = 1; month <= 12; ++month) {
             auto d = date_day(y, month, 1);

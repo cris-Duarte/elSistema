@@ -1,0 +1,143 @@
+dependencies:
+  espressif/cmake_utilities:
+    dependencies: []
+    source:
+      path: /Users/cristhianduarte/Documents/ChatGPT/my m5stack firmware/piensaware/components/espressif__cmake_utilities
+      type: local
+    version: 0.5.3
+  espressif/eppp_link:
+    component_hash: c1369b37f2b0b427b198ae14e07e7547d3da92b95fe4dc7f949e5de560b35f21
+    dependencies:
+    - name: espressif/esp_serial_slave_link
+      registry_url: https://components.espressif.com
+      require: private
+      version: ^1.1.0
+    - name: idf
+      require: private
+      version: '>=5.2'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.1.6
+  espressif/esp_codec_dev:
+    dependencies: []
+    source:
+      path: /Users/cristhianduarte/Documents/ChatGPT/my m5stack firmware/piensaware/components/espressif__esp_codec_dev
+      type: local
+    version: 1.3.4
+  espressif/esp_hosted:
+    component_hash: 9e7a202cc18c08fa9b67c0261f9733b33af9b3af73eafd4ef6704cdb37bde7c2
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.3'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.4.1
+  espressif/esp_lcd_st7703:
+    dependencies: []
+    source:
+      path: /Users/cristhianduarte/Documents/ChatGPT/my m5stack firmware/piensaware/components/espressif__esp_lcd_st7703
+      type: local
+    version: 1.0.3
+  espressif/esp_lcd_touch:
+    dependencies: []
+    source:
+      path: /Users/cristhianduarte/Documents/ChatGPT/my m5stack firmware/piensaware/components/espressif__esp_lcd_touch
+      type: local
+    version: 1.1.2
+  espressif/esp_lcd_touch_gt911:
+    dependencies: []
+    source:
+      path: /Users/cristhianduarte/Documents/ChatGPT/my m5stack firmware/piensaware/components/espressif__esp_lcd_touch_gt911
+      type: local
+    version: 1.1.3
+  espressif/esp_lcd_touch_st7123:
+    dependencies: []
+    source:
+      path: /Users/cristhianduarte/Documents/ChatGPT/my m5stack firmware/piensaware/components/espressif__esp_lcd_touch_st7123
+      type: local
+    version: 1.0.0
+  espressif/esp_serial_slave_link:
+    component_hash: ac1776806de0a6e371c84e87898bb983e19ce62aa7f1e2e5c4a3b0234a575d2c
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.1.2
+  espressif/esp_wifi_remote:
+    component_hash: fe6f6ab351cf9459116630c73bdaa5ce43e367c237fc402d6315da63d33ac543
+    dependencies:
+    - name: espressif/eppp_link
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=0.1'
+    - name: espressif/esp_hosted
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: target in [esp32h2, esp32p4]
+      version: '>=0.0.6'
+    - name: idf
+      require: private
+      version: '>=5.3'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 0.5.1
+  espressif/usb_host_hid:
+    dependencies: []
+    source:
+      path: /Users/cristhianduarte/Documents/ChatGPT/my m5stack firmware/piensaware/components/espressif__usb_host_hid
+      type: local
+    version: 1.0.3
+  idf:
+    source:
+      type: idf
+    version: 5.4.2
+  lvgl/lvgl:
+    component_hash: 096c69af22eaf8a2b721e3913da91918c5e6bf1a762a113ec01f401aa61337a0
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 9.2.2
+  m5stack/m5gfx:
+    component_hash: ebd725c94610759ccfc1227f60a395932f591e17b95bebec80164d853535c8c5
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 0.2.32
+  m5stack/m5unified:
+    component_hash: bb9ff4b92043883ee4a553425de0ef6382ebc217bf8439eadf8266d0b0023dd4
+    dependencies:
+    - name: m5stack/m5gfx
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=0.2.31'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 0.2.25
+direct_dependencies:
+- espressif/cmake_utilities
+- espressif/esp_codec_dev
+- espressif/esp_hosted
+- espressif/esp_lcd_st7703
+- espressif/esp_lcd_touch
+- espressif/esp_lcd_touch_gt911
+- espressif/esp_lcd_touch_st7123
+- espressif/esp_wifi_remote
+- espressif/usb_host_hid
+- idf
+- lvgl/lvgl
+- m5stack/m5gfx
+- m5stack/m5unified
+manifest_hash: 2277b1bf8ddcac43b2cc5e61775ae6a3f71754b604b2a21fc794cbf5ba276a99
+target: esp32p4
+version: 2.0.0

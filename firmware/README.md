@@ -5,9 +5,21 @@ oficial de M5Stack Tab5 y LVGL 9.2.2. El dictado requiere además
 Wi-Fi local y el servidor del MacBook (`tools/whisper/`); sin red la app
 sigue funcionando con teclado.
 
-Los módulos disponibles son Productividad, Asistente, Tetris y Hábitos.
+Los módulos disponibles son Productividad, Asistente, Tetris, Hábitos y Cámara
+(prueba técnica USB, pendiente de validación con la Sony).
+
+El ID 9 queda retirado. Al arrancar este firmware, una migración borra únicamente
+su antiguo espacio NVS de cuenta y preferencias. No formatea ni modifica los
+datos de los módulos activos. La retirada del proyecto no cambia por sí sola el
+firmware que ya está instalado: esa limpieza se ejecuta después de flashear.
 
 ## Funciones incluidas
+
+- Módulo **CÁMARA** (ID 10), primera entrega: monitor USB MJPEG 720p en horizontal
+  fijo, diagnóstico de formatos/FPS/memoria y recuperación de señal. No controla
+  REC ni graba video. No se han habilitado las ayudas de encuadre: primero debe
+  verificarse la Sony ZV-E10 II grabando 4K a 25/30 fps simultáneamente.
+  [Estado y prueba física](../docs/camara/README.md), [diseño](../docs/camara/design.md).
 
 - Módulo **HÁBITOS** (ID 6): diarios con metas semanales flexibles y mosaico de
   doce semanas; continuos con contador RTC e historial de periodos. JSON propio

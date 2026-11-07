@@ -9,6 +9,9 @@ idf_component_register(
         "audio.cpp"
         "audio_session.cpp"
         "ble.cpp"
+        "camera.cpp"
+        "camera_model.cpp"
+        "camera_usb.cpp"
         "connectivity.cpp"
         "dictation.cpp"
         "hardware.cpp"
@@ -23,6 +26,7 @@ idf_component_register(
         "m5_platform.cpp"
         "model.cpp"
         "repository.cpp"
+        "retired_storage.cpp"
         "services.cpp"
         "transcription.cpp"
         "tetris.cpp"
@@ -31,6 +35,8 @@ idf_component_register(
         "tetris_renderer.cpp"
         "tetris_sound.cpp"
         "ui_tetris.cpp"
+        "ui_camera.cpp"
+        "usb_host_runtime.cpp"
         "ui.cpp"
         "assets/assistant_character.c"
         "assets/assistant_character_data.c"
@@ -43,7 +49,7 @@ idf_component_register(
     INCLUDE_DIRS "." "assets"
     REQUIRES m5stack_tab5 esp_timer json nvs_flash spiffs m5stack__m5unified m5stack__m5gfx
              esp_event esp_http_client esp_netif esp_wifi espressif__esp_hosted espressif__esp_wifi_remote heap
-             espressif__mdns bt
+             espressif__mdns bt usb esp_driver_jpeg espressif__usb_host_uvc
     PRIV_REQUIRES unity
     EMBED_FILES "assets/assistant_ack.pcm" "assets/habits_notice.pcm"
 )

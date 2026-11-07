@@ -38,8 +38,10 @@ Se usan Rajdhani para títulos/cifras y Poppins para texto de apoyo.
 - Iconos de aplicación de 58×58 px, con nombre debajo y zona táctil de
   152×110 px. Productividad usa una lista; Asistente, una cara de robot;
   Tetris añade bloques pixelados sobre violeta; Hábitos, un calendario sobre
-  verde. Los cuatro módulos usan una fila en horizontal y dos filas centradas
-  (tres más uno) en vertical. Hábitos usa ID 6, sin reciclar los IDs retirados.
+  verde; Cámara añade un cuerpo y objetivo sobre azul grisáceo (`#A5C2D1`).
+  Los cinco módulos usan una fila en horizontal y dos filas centradas
+  (tres más dos) en vertical. Hábitos usa ID 6 y Cámara ID 10, sin reciclar los IDs retirados.
+  Los IDs 2, 3, 5, 7, 8 y 9 quedan retirados y no se reutilizan.
 - Rejilla extensible con filas centradas: hasta cinco módulos por fila en
   horizontal y tres en vertical. No mostrar las
   antiguas tarjetas grandes, descripciones ni números de módulo.

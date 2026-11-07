@@ -1,0 +1,5 @@
+dependencies:
+  m5stack/m5unified: "=0.2.25"
+  m5stack/m5gfx: "=0.2.32"
+  espressif/esp_wifi_remote: "=0.5.1"
+  espressif/esp_hosted: "=1.4.1"
